@@ -22,14 +22,15 @@ func (c *Client) Send(msg *Msg) *Msg {
 	if err != nil {
 		log.Println(err)
 	}
-	log.Writer().Write(b)
+	log.Printf("send: %+v\n", msg)
 	n, err := conn.Write(b)
 	if err != nil {
 		log.Println(err)
 	}
-	resBytes := []byte{}
+	resBytes := make([]byte, 4096)
 	n, err = conn.Read(resBytes)
 	res := Msg{}
 	json.Unmarshal(resBytes[0:n], &res)
+	log.Printf("recv: %+v\n", res)
 	return &res
 }
