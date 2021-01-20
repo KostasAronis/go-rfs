@@ -2,52 +2,42 @@ package tcp
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"net"
 )
 
+//Server describes a server listening for tcp messages from tcp clients
 type Server struct {
 	Address string
 }
 
-func (s Server) Start() {
-	l, err := net.Listen("tcp", s.Address)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer l.Close()
-
-	c, err := l.Accept()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	for {
-		data := []byte{}
-		n, err := c.Read(data)
+//Start Starts the server and listens for tcp messages
+func (s *Server) Start(recv chan *Msg, send chan *Msg) error {
+	go func() {
+		l, err := net.Listen("tcp4", s.Address)
 		if err != nil {
-			fmt.Println(err)
-			return
+			log.Println(err)
+			panic(err)
 		}
-		msg := TCPMsg{}
-		err = json.Unmarshal(data[0:n], &msg)
-		response := getResponse(msg)
-		resBytes, err := json.Marshal(response)
-		c.Write(resBytes)
-	}
-}
-
-func getResponse(msg TCPMsg) TCPMsg {
-	res := TCPMsg{}
-	switch res.MSGType {
-	case Read:
-		return res
-
-	case Write:
-		return res
-
-	default:
-		return res
-	}
+		defer l.Close()
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				log.Println(err)
+				panic(err)
+			}
+			data := make([]byte, 2048)
+			n, err := c.Read(data)
+			if err != nil {
+				log.Println(err)
+			}
+			msg := Msg{}
+			err = json.Unmarshal(data[0:n], &msg)
+			recv <- &msg
+			response := <-send
+			resBytes, err := json.Marshal(response)
+			c.Write(resBytes)
+		}
+	}()
+	return nil
 }
