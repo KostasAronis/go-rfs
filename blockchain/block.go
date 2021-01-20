@@ -27,10 +27,12 @@ type Block struct {
 	IsOp bool
 	//Ops An ordered set of operation records
 	Ops []*OpRecord
+	//Confirmations A counter of network confirmations for this block
+	Confirmations int
 }
 
-func (b *Block) GetComputedHash() (string, error) {
-	return b.hash, nil
+func (b *Block) GetComputedHash() string {
+	return b.hash
 }
 func (b *Block) ComputeHash() (string, error) {
 	// buf := &bytes.Buffer{}
@@ -52,6 +54,9 @@ func (b *Block) ValidHash(difficulty int) (bool, error) {
 	hash, err := b.ComputeHash()
 	if err != nil {
 		return false, err
+	}
+	if hash != b.hash {
+		return false, nil
 	}
 	return validHash(hash, difficulty), nil
 }
