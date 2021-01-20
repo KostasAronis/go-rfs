@@ -11,8 +11,13 @@ type Server struct {
 	Address string
 }
 
+type Connection struct {
+	Recv chan *Msg
+	Send chan *Msg
+}
+
 //Start Starts the server and listens for tcp messages
-func (s *Server) Start(recv chan *Msg, send chan *Msg) error {
+func (s *Server) Start(connectionsChannel chan *Connection) error {
 	go func() {
 		l, err := net.Listen("tcp4", s.Address)
 		if err != nil {
@@ -26,18 +31,26 @@ func (s *Server) Start(recv chan *Msg, send chan *Msg) error {
 				log.Println(err)
 				panic(err)
 			}
-			data := make([]byte, 2048)
-			n, err := c.Read(data)
-			if err != nil {
-				log.Println(err)
+			cChan := Connection{
+				Recv: make(chan *Msg),
+				Send: make(chan *Msg),
 			}
-			msg := Msg{}
-			err = json.Unmarshal(data[0:n], &msg)
-			recv <- &msg
-			response := <-send
-			resBytes, err := json.Marshal(response)
-			c.Write(resBytes)
+			go s.waitForResponse(c.(*net.TCPConn), &cChan)
+			connectionsChannel <- &cChan
 		}
 	}()
 	return nil
+}
+func (s *Server) waitForResponse(c *net.TCPConn, conn *Connection) {
+	data := make([]byte, 2048)
+	n, err := c.Read(data)
+	if err != nil {
+		log.Println(err)
+	}
+	msg := Msg{}
+	err = json.Unmarshal(data[0:n], &msg)
+	conn.Recv <- &msg
+	response := <-conn.Send
+	resBytes, err := json.Marshal(response)
+	c.Write(resBytes)
 }

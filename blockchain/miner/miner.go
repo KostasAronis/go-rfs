@@ -7,7 +7,6 @@ package miner
 */
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -80,50 +79,97 @@ func (m *Miner) initBlockchain() error {
 		return err
 	}
 	if m.minerConfig.CommonMinerConfig.GenesisBlockHash != genesisBlockHash {
-		return errors.New("incorrect genesis block hash")
+		return fmt.Errorf("incorrect genesis block hash given: %s != %s :computed", m.minerConfig.CommonMinerConfig.GenesisBlockHash, genesisBlockHash)
+	}
+	m.blockchain = &blockchain.BlockTree{
+		GenesisNode: &genesisBlock,
+		NoopDiff:    m.minerConfig.CommonMinerConfig.PowPerNoOpBlock,
+		OpDiff:      m.minerConfig.CommonMinerConfig.PowPerOpBlock,
 	}
 	return nil
 }
 
 func (m *Miner) startListeningTCP() error {
-	blockChainSend, blockChainRecv, clientSend, clientRecv := make(chan *tcp.Msg), make(chan *tcp.Msg), make(chan *tcp.Msg), make(chan *tcp.Msg)
+	blockChainConnections, clientConnections := make(chan *tcp.Connection, 10), make(chan *tcp.Connection, 10)
 	// blockChainErr, clientErr := make(chan error), make(chan error)
-	err := m.blockchainServer.Start(blockChainRecv, blockChainSend)
+	err := m.blockchainServer.Start(blockChainConnections)
 	if err != nil {
 		return err
 	}
 	log.Printf("miners server listening on: %s\n", m.minerConfig.IncomingMinersAddr)
-	err = m.clientServer.Start(clientRecv, clientSend)
+	err = m.clientServer.Start(clientConnections)
 	if err != nil {
 		return err
 	}
 	log.Printf("client server listening on: %s\n", m.minerConfig.IncomingClientsAddr)
 	for {
 		select {
-		case msg, ok := <-blockChainRecv:
+		case conn, ok := <-blockChainConnections:
 			if ok {
-				log.Printf("blockchain server recv: %s", msg.MSGType)
-				res := m.handleBlockchainMsg(msg)
-				blockChainSend <- res
+				go m.handleBlockchainConn(conn)
 			}
-		case msg, ok := <-clientRecv:
+		case conn, ok := <-clientConnections:
 			if ok {
-				res := m.handleClientMsg(msg)
-				log.Printf("client server recv: %s", msg.MSGType)
-				clientSend <- res
+				go m.handleClientConn(conn)
 			}
 		}
 	}
 }
 
-func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
-	return nil
+func (m *Miner) handleBlockchainConn(conn *tcp.Connection) {
+	msg := <-conn.Recv
+	log.Printf("blockchain server recv: %s", msg.MSGType)
+	res := &tcp.Msg{
+		MSGType: tcp.Error,
+		Payload: "NIY",
+	}
+	conn.Send <- res
 }
 
-//TODO: PRETTIFY THIS MESS!!!
+func (m *Miner) handleClientConn(conn *tcp.Connection) {
+	msg := <-conn.Recv
+	log.Printf("client server recv: %s", msg.MSGType)
+	conn.Send <- m.handleClientMsg(msg)
+}
+
 func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 	switch msg.MSGType {
 	case tcp.CreateFile:
+		optype := blockchain.OpType(msg.MSGType)
+		payload, ok := msg.Payload.(map[string]interface{})
+		if !ok {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: "Incorrect payload",
+			}
+		}
+		filename, ok := payload["Filename"]
+		if !ok {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: "Incorrect payload",
+			}
+		}
+		record, ok := payload["Record"]
+		if !ok {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: "Incorrect payload",
+			}
+		}
+		op := blockchain.OpRecord{
+			OpType:   optype,
+			MinerID:  m.minerConfig.MinerID,
+			Filename: filename.(string),
+			Record:   record.(string),
+		}
+		op.OpType = optype
+		m.addOp(&op)
+		log.Println(optype)
+		return &tcp.Msg{
+			MSGType: msg.MSGType,
+			Payload: "OpAdded",
+		}
 	case tcp.AppendRec:
 		optype := blockchain.OpType(msg.MSGType)
 		payload, ok := msg.Payload.(map[string]interface{})
@@ -192,6 +238,7 @@ func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 			MSGType: msg.MSGType,
 			Payload: resPayload,
 		}
+	// Read record operation on the rfs, no blocking
 	case tcp.ReadRec:
 		payload, ok := msg.Payload.(map[string]interface{})
 		if !ok {
