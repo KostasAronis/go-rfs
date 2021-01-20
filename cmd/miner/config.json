@@ -13,6 +13,6 @@
     "PowPerNoOpBlock": 5,
     "ConfirmsPerFileCreate": 1,
     "ConfirmsPerFileAppend": 2,
-    "GenesisBlockHash": "01678600d79d4c3282ee486aed37ce14"
+    "GenesisBlockHash": "af6aaa6a229b361b9374df2e39879bed"
   }
 }
