@@ -8,7 +8,9 @@ import (
 )
 
 /*
-	TODO: Convert Ops to a more generic IContent interface for things other than fs operations to be stored in the blockchain
+	TODO:
+	1) Convert Ops to a more generic IContent interface for things other than fs operations to be stored in the blockchain
+	2) Add Timestamp
 */
 
 //Block contains multiple operations on the rfs
@@ -29,11 +31,15 @@ type Block struct {
 	Ops []*OpRecord
 	//Confirmations A counter of network confirmations for this block
 	Confirmations int
+	isGenesis     bool
 }
 
+//GetComputedHash returns the stored hash
 func (b *Block) GetComputedHash() string {
 	return b.hash
 }
+
+//ComputeHash computes the current hash
 func (b *Block) ComputeHash() (string, error) {
 	// buf := &bytes.Buffer{}
 	// err := binary.Write(buf, binary.LittleEndian, b)
@@ -47,10 +53,12 @@ func (b *Block) ComputeHash() (string, error) {
 		return "", err
 	}
 	str := hex.EncodeToString(h.Sum(nil))
+	b.hash = str
 	return str, nil
 }
 
-func (b *Block) ValidHash(difficulty int) (bool, error) {
+//IsValid computes the current hash, checks it against stored hash and also checks the POW of the block
+func (b *Block) IsValid(difficulty int) (bool, error) {
 	hash, err := b.ComputeHash()
 	if err != nil {
 		return false, err
@@ -58,10 +66,23 @@ func (b *Block) ValidHash(difficulty int) (bool, error) {
 	if hash != b.hash {
 		return false, nil
 	}
-	return validHash(hash, difficulty), nil
+	if b.isGenesis {
+		return true, nil
+	}
+	return validPOW(hash, difficulty), nil
 }
 
-func validHash(hash string, difficulty int) bool {
+//HasValidNonce computes the current hash and checks the pow of the block
+func (b *Block) HasValidNonce(difficulty int) (bool, error) {
+	hash, err := b.ComputeHash()
+	if err != nil {
+		return false, err
+	}
+	return validPOW(hash, difficulty), nil
+}
+
+//ValidPOW checks just the last {difficulty} characters of the hash
+func validPOW(hash string, difficulty int) bool {
 	lastNDigits := hash[len(hash)-int(difficulty):]
 	nZeros := strings.Repeat("0", int(difficulty))
 	if lastNDigits == nZeros {
