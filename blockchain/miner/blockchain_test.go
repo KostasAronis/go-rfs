@@ -8,7 +8,7 @@ import (
 )
 
 func TestMiner(t *testing.T) {
-	minerConfig := miner.MinerConfig{
+	minerConfig := miner.Config{
 		MinerID:             "1",
 		PeerMinersAddrs:     []string{"127.0.0.1:9002", "127.0.0.1:9003", "127.0.0.1:9004"},
 		IncomingClientsAddr: "127.0.0.1:8001",

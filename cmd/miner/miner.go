@@ -8,6 +8,7 @@ import (
 	"github.com/KostasAronis/go-rfs/blockchain"
 	"github.com/KostasAronis/go-rfs/blockchain/miner"
 	"github.com/KostasAronis/go-rfs/filesystem"
+	"github.com/KostasAronis/go-rfs/minerconfig"
 	"github.com/KostasAronis/go-rfs/tcp"
 )
 
@@ -17,7 +18,7 @@ func init() {
 }
 func main() {
 	configFile, _ := ioutil.ReadFile("config.json")
-	config := miner.MinerConfig{}
+	config := minerconfig.Config{}
 	err := json.Unmarshal([]byte(configFile), &config)
 	if err != nil {
 		panic(err)
