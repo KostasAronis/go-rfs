@@ -8,12 +8,16 @@ import (
 
 //Client describes a simple tcp client
 type Client struct {
+	ID      string
 	Address string
 	Target  string
 }
 
 //Send Sends tcp message to server
 func (c *Client) Send(msg *Msg) *Msg {
+	if msg.ClientID == "" {
+		msg.ClientID = c.ID
+	}
 	conn, err := net.Dial("tcp", c.Target)
 	if err != nil {
 		log.Println(err)
