@@ -1,6 +1,7 @@
 package tcp
 
 type Msg struct {
-	MSGType MSGType
-	Payload interface{}
+	ClientID string
+	MSGType  MSGType
+	Payload  interface{}
 }
