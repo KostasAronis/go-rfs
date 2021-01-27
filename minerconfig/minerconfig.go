@@ -1,4 +1,4 @@
-package miner
+package minerconfig
 
 import (
 	"encoding/json"
@@ -28,7 +28,7 @@ type CommonMinerConfig struct {
 }
 
 //MinerConfig struct describing the configuration for individual mienrs
-type MinerConfig struct {
+type Config struct {
 	//MinerID The ID of this miner (max 16 characters).
 	MinerID string
 	//PeerMinersAddrs An array of remote IP:port addresses, one per peer miner that this miner should connect to (using the OutgoingMinersIP below)
@@ -44,7 +44,7 @@ type MinerConfig struct {
 }
 
 //Load reads values from given filename
-func (c MinerConfig) Load(str string) {
+func (c Config) Load(str string) {
 	f, err := os.Open("config.json")
 	if err != nil {
 		panic(err)
