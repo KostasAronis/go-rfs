@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+
+	"github.com/DistributedClocks/GoVector/govec"
 )
 
 //Server describes a server listening for tcp messages from tcp clients
 type Server struct {
-	Address string
+	ID          string
+	Address     string
+	GovecLogger *govec.GoLog
 }
 
 type Connection struct {
@@ -18,6 +22,13 @@ type Connection struct {
 
 //Start Starts the server and listens for tcp messages
 func (s *Server) Start(connectionsChannel chan *Connection) error {
+	if s.GovecLogger == nil {
+		log.Println("starting goviz logger")
+		goVecConfig := govec.GetDefaultConfig()
+		goVecConfig.UseTimestamps = true
+		goVecConfig.AppendLog = true
+		s.GovecLogger = govec.InitGoVector(s.ID, s.ID+"GoVector.log", goVecConfig)
+	}
 	go func() {
 		l, err := net.Listen("tcp4", s.Address)
 		if err != nil {
@@ -48,6 +59,7 @@ func (s *Server) waitForResponse(c *net.TCPConn, conn *Connection) {
 		log.Println(err)
 	}
 	msg := Msg{}
+	s.GovecLogger.UnpackReceive("ReceivingMessage", data, &msg, govec.GetDefaultLogOptions())
 	err = json.Unmarshal(data[0:n], &msg)
 	conn.Recv <- &msg
 	response := <-conn.Send
