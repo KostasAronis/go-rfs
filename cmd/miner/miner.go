@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"os"
 
 	"github.com/KostasAronis/go-rfs/blockchain/miner"
 	"github.com/KostasAronis/go-rfs/filesystem"
@@ -15,7 +16,11 @@ var fs filesystem.FileSystem
 func init() {
 }
 func main() {
-	configFile, _ := ioutil.ReadFile("config.json")
+	configFilepath := "config.json"
+	if len(os.Args) > 1 {
+		configFilepath = os.Args[1]
+	}
+	configFile, _ := ioutil.ReadFile(configFilepath)
 	config := minerconfig.Config{}
 	err := json.Unmarshal([]byte(configFile), &config)
 	if err != nil {
