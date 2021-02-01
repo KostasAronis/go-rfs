@@ -16,6 +16,6 @@
 
 Assignment
 .vscode
-.txt
-.log
-.dat
+*.txt
+*.log
+*.dat
