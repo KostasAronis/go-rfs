@@ -5,11 +5,9 @@ import (
 	"io/ioutil"
 	"log"
 
-	"github.com/KostasAronis/go-rfs/blockchain"
 	"github.com/KostasAronis/go-rfs/blockchain/miner"
 	"github.com/KostasAronis/go-rfs/filesystem"
 	"github.com/KostasAronis/go-rfs/minerconfig"
-	"github.com/KostasAronis/go-rfs/tcp"
 )
 
 var fs filesystem.FileSystem
@@ -30,13 +28,4 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func handleClientMsg(msg *tcp.Msg) *tcp.Msg {
-	if msg.MSGType == tcp.MSGType(blockchain.AppendRec) || msg.MSGType == tcp.MSGType(blockchain.CreateFile) {
-		optype := blockchain.OpType(msg.MSGType)
-		log.Println(optype)
-	}
-	log.Println("not an op")
-	return nil
 }
