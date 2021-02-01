@@ -20,8 +20,6 @@ type Block struct {
 		Must be MD5 hash and contain {config.Difficulty} number of zeroes at the end of the hex representation.
 	*/
 	PrevHash string
-	//Hash stores the md5 hash of the current block
-	hash string
 	// MinerID the id of the miner that computed this block
 	MinerID string
 	Nonce   uint32
@@ -31,12 +29,6 @@ type Block struct {
 	Ops []*OpRecord
 	//Confirmations A counter of network confirmations for this block
 	Confirmations int
-	isGenesis     bool
-}
-
-//GetComputedHash returns the stored hash
-func (b *Block) GetComputedHash() string {
-	return b.hash
 }
 
 //ComputeHash computes the current hash
@@ -53,7 +45,6 @@ func (b *Block) ComputeHash() (string, error) {
 		return "", err
 	}
 	str := hex.EncodeToString(h.Sum(nil))
-	b.hash = str
 	return str, nil
 }
 
@@ -62,12 +53,6 @@ func (b *Block) IsValid(difficulty int) (bool, error) {
 	hash, err := b.ComputeHash()
 	if err != nil {
 		return false, err
-	}
-	if hash != b.hash {
-		return false, nil
-	}
-	if b.isGenesis {
-		return true, nil
 	}
 	return validPOW(hash, difficulty), nil
 }

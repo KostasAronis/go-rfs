@@ -55,7 +55,15 @@ func (b *BlockTree) AppendBlock(block *Block) error {
 		return errors.New("invalid block")
 	}
 	for _, existingBlock := range b.Blocks {
-		if existingBlock.hash == block.hash {
+		hash, err := block.ComputeHash()
+		if err != nil {
+			return err
+		}
+		eHash, err := existingBlock.ComputeHash()
+		if err != nil {
+			return err
+		}
+		if eHash == hash {
 			return nil
 		}
 	}
@@ -68,13 +76,25 @@ func (b *BlockTree) generateChains() [][]*Block {
 	genesisChain := []*Block{b.GenesisNode}
 	chains = append(chains, genesisChain)
 	for _, newBlock := range b.Blocks {
-		if newBlock.hash == b.GenesisNode.hash {
+		newHash, err := newBlock.ComputeHash()
+		if err != nil {
+			panic(err)
+		}
+		genHash, err := b.GenesisNode.ComputeHash()
+		if err != nil {
+			panic(err)
+		}
+		if newHash == genHash {
 			continue
 		}
 		added := false
 		for cIdx, chain := range chains {
 			for bIdx, block := range chain {
-				if block.hash == newBlock.PrevHash {
+				hash, err := block.ComputeHash()
+				if err != nil {
+					panic(err)
+				}
+				if hash == newBlock.PrevHash {
 					if len(chain) > bIdx+1 { //create a new chain
 						newChain := []*Block{}
 						copy(newChain, chain)
@@ -96,7 +116,11 @@ func (b *BlockTree) generateChains() [][]*Block {
 
 func (b *BlockTree) getBlockByHash(hash string) *Block {
 	for _, block := range b.Blocks {
-		if block.GetComputedHash() == hash {
+		h, err := block.ComputeHash()
+		if err != nil {
+			panic(err)
+		}
+		if h == hash {
 			return block
 		}
 	}
@@ -104,7 +128,15 @@ func (b *BlockTree) getBlockByHash(hash string) *Block {
 }
 
 func (b *BlockTree) validNode(block *Block, backCheck int) (bool, error) {
-	if block.hash == b.GenesisNode.hash {
+	hash, err := block.ComputeHash()
+	if err != nil {
+		return false, err
+	}
+	gHash, err := b.GenesisNode.ComputeHash()
+	if err != nil {
+		return false, err
+	}
+	if hash == gHash {
 		return true, nil
 	}
 	var diff int
