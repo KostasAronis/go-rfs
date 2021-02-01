@@ -10,6 +10,7 @@ import (
 	"github.com/KostasAronis/go-rfs/blockchain"
 	"github.com/KostasAronis/go-rfs/filesystem"
 	"github.com/KostasAronis/go-rfs/minerconfig"
+	"github.com/KostasAronis/go-rfs/serialization"
 )
 
 const maxNonce uint32 = 4294967295
@@ -17,20 +18,21 @@ const goRoutineCount = 5
 
 type BlockchainFS struct {
 	//on init
-	config        *minerconfig.Config
-	breakNoopChan chan bool
-	blockchain    *blockchain.BlockTree
-	FS            *filesystem.FileSystem
-	bank          map[string]int
+	config         *minerconfig.Config
+	pauseNoopChan  chan bool
+	resumeNoopChan chan bool
+	blockchain     *blockchain.BlockTree
+	FS             *filesystem.FileSystem
+	bank           map[string]int
 	//on new staging
-	timer       *time.Timer
-	stagingOps  []*blockchain.OpRecord
-	stagingFS   *filesystem.FileSystem
-	stagingBank map[string]int
-	//unused?
-	ProducedBlock      chan *blockchain.Block
-	waitingClientErr   []chan error
+	timer              *time.Timer
+	stagingOps         []*blockchain.OpRecord
+	stagingFS          *filesystem.FileSystem
+	stagingBank        map[string]int
 	waitingClientBlock []chan *blockchain.Block
+	//unused?
+	producedBlock    chan *blockchain.Block
+	waitingClientErr []chan error
 }
 
 //Init initializes BlockchainFS
@@ -43,82 +45,19 @@ func (b *BlockchainFS) Init(config *minerconfig.Config) error {
 		return err
 	}
 	b.bank = map[string]int{}
-	b.breakNoopChan = make(chan bool)
-	b.mineForever(b.breakNoopChan)
+	b.pauseNoopChan = make(chan bool)
+	b.resumeNoopChan = make(chan bool)
+	go b.mineForever(b.pauseNoopChan, b.resumeNoopChan)
 	return nil
 }
-func (b *BlockchainFS) initBlockchain() error {
-	genesisBlock := blockchain.Block{
-		PrevHash: "",
-		Nonce:    0,
-		MinerID:  "0",
-		IsOp:     false,
-	}
-	genesisBlockHash, err := genesisBlock.ComputeHash()
+
+//AddBlock adds mined block
+func (b *BlockchainFS) AddBlock(block *blockchain.Block) error {
+	err := b.blockchain.AppendBlock(block)
 	if err != nil {
 		return err
 	}
-	if b.config.CommonMinerConfig.GenesisBlockHash != genesisBlockHash {
-		return fmt.Errorf("incorrect genesis block hash given: %s != %s :computed", b.config.CommonMinerConfig.GenesisBlockHash, genesisBlockHash)
-	}
-	b.blockchain = &blockchain.BlockTree{
-		M:           &sync.Mutex{},
-		GenesisNode: &genesisBlock,
-		Blocks: []*blockchain.Block{
-			&genesisBlock,
-		},
-		NoopDiff: b.config.CommonMinerConfig.PowPerNoOpBlock,
-		OpDiff:   b.config.CommonMinerConfig.PowPerOpBlock,
-	}
 	return nil
-}
-
-func (b *BlockchainFS) mineNOOP(block *blockchain.Block, done chan *blockchain.Block) {
-	block = b.mine(block)
-	done <- block
-}
-
-func (b *BlockchainFS) startMiningNoop(done chan *blockchain.Block, stop chan bool) {
-	noop := blockchain.Block{
-		PrevHash: b.blockchain.GetLastBlock().GetComputedHash(),
-		MinerID:  b.config.MinerID,
-		IsOp:     false,
-	}
-	noopMined := make(chan *blockchain.Block)
-	go b.mineNOOP(&noop, noopMined)
-	for {
-		select {
-		case <-stop:
-			return
-		case block := <-noopMined:
-			done <- block
-		}
-	}
-}
-func (b *BlockchainFS) mineForever(pause chan bool) {
-	log.Println("started mining")
-	for {
-		log.Println("new mining loop")
-		noopMined := make(chan *blockchain.Block, 1)
-		stopChan := make(chan bool, 1)
-		go b.startMiningNoop(noopMined, stopChan)
-		for {
-			select {
-			case noopBlock := <-noopMined:
-				h := noopBlock.GetComputedHash()
-				log.Printf("mined noop block: %s", h)
-				err := b.AddBlock(noopBlock)
-				if err != nil {
-					panic(err)
-				}
-				b.bank[b.config.MinerID] = b.bank[b.config.MinerID] + b.config.CommonMinerConfig.MinedCoinsPerNoOpBlock
-				break
-			case <-pause:
-				break
-			}
-			break
-		}
-	}
 }
 
 func (b *BlockchainFS) TryStageOp(op *blockchain.OpRecord) (chan *blockchain.Block, error) {
@@ -157,6 +96,105 @@ func (b *BlockchainFS) TryStageOp(op *blockchain.OpRecord) (chan *blockchain.Blo
 	b.waitingClientBlock = append(b.waitingClientBlock, blockChan)
 	return blockChan, nil
 }
+func (b *BlockchainFS) initBlockchain() error {
+	genesisBlock := blockchain.Block{
+		PrevHash: "",
+		Nonce:    0,
+		MinerID:  "0",
+		IsOp:     false,
+	}
+	genesisBlockHash, err := genesisBlock.ComputeHash()
+	if err != nil {
+		return err
+	}
+	if b.config.CommonMinerConfig.GenesisBlockHash != genesisBlockHash {
+		return fmt.Errorf("incorrect genesis block hash given: %s != %s :computed", b.config.CommonMinerConfig.GenesisBlockHash, genesisBlockHash)
+	}
+	b.blockchain = &blockchain.BlockTree{
+		M:           &sync.Mutex{},
+		GenesisNode: &genesisBlock,
+		Blocks: []*blockchain.Block{
+			&genesisBlock,
+		},
+		NoopDiff: b.config.CommonMinerConfig.PowPerNoOpBlock,
+		OpDiff:   b.config.CommonMinerConfig.PowPerOpBlock,
+	}
+	return nil
+}
+func (b *BlockchainFS) Store(filename string) {
+	bytes := serialization.EncodeToBytes(b.blockchain)
+	serialization.WriteToFile(bytes, filename)
+}
+func (b *BlockchainFS) Restore(filename string) {
+	bytes := serialization.ReadFromFile(filename)
+	blockTree := serialization.DecodeToBlockTree(bytes)
+	b.blockchain = &blockTree
+}
+func (b *BlockchainFS) mineNOOP(block *blockchain.Block, done chan *blockchain.Block) {
+	block = b.mine(block)
+	done <- block
+}
+
+func (b *BlockchainFS) startMiningNoop(done chan *blockchain.Block, stop chan bool) {
+	prevHash, err := b.blockchain.GetLastBlock().ComputeHash()
+	if err != nil {
+		panic(err)
+	}
+	noop := blockchain.Block{
+		PrevHash: prevHash,
+		MinerID:  b.config.MinerID,
+		IsOp:     false,
+	}
+	noopMined := make(chan *blockchain.Block)
+	go b.mineNOOP(&noop, noopMined)
+	for {
+		select {
+		case <-stop:
+			return
+		case block := <-noopMined:
+			done <- block
+		}
+	}
+}
+
+func canStartNoOp() bool {
+	m := sync.Mutex{}
+	m.Lock()
+	m.Unlock()
+	return true
+}
+
+func (b *BlockchainFS) mineForever(pause chan bool, resume chan bool) {
+	log.Println("started mining")
+	for {
+		log.Println("new mining loop")
+		noopMined := make(chan *blockchain.Block, 1)
+		stopChan := make(chan bool, 1)
+		go b.startMiningNoop(noopMined, stopChan)
+		for {
+			select {
+			case noopBlock := <-noopMined:
+				h, err := noopBlock.ComputeHash()
+				if err != nil {
+					panic(err)
+				}
+				log.Printf("mined noop block: %s\n", h)
+				err = b.tryAddBlock(noopBlock)
+				if err != nil {
+					panic(err)
+				}
+				log.Printf("added noop block: %s\n", h)
+				break
+			case <-pause:
+				log.Println("noop mining paused")
+				<-resume
+				log.Println("noop mining resumed")
+				break
+			}
+			break
+		}
+	}
+}
 
 func (b *BlockchainFS) initStaging() {
 	b.stagingFS = b.FS.Clone()
@@ -169,45 +207,64 @@ func (b *BlockchainFS) initStaging() {
 }
 
 func (b *BlockchainFS) startTimer() {
+	log.Println("started timer on new op batch")
 	b.timer = time.NewTimer(time.Duration(b.config.CommonMinerConfig.GenOpBlockTimeout) * time.Millisecond)
 	go func() {
 		<-b.timer.C
+		log.Println("started mining new op block")
+		b.pauseNoopChan <- true
 		newBlock := b.createStageBlock()
-		b.breakNoopChan <- true
+		hash, err := newBlock.ComputeHash()
+		if err != nil {
+			panic(err)
+		}
+		err = b.tryAddBlock(newBlock)
+		if err != nil {
+			panic(err)
+		}
+		log.Println("added op block")
+		b.resumeNoopChan <- true
+		log.Printf("mined op block %s\n", hash)
 		for _, c := range b.waitingClientBlock {
 			c <- newBlock
 		}
-		b.ProducedBlock <- newBlock
-		b.AddBlock(newBlock)
 	}()
+}
+
+func (b *BlockchainFS) tryAddBlock(block *blockchain.Block) error {
+	err := b.AddBlock(block)
+	if err != nil {
+		panic(err)
+	}
+	coins := b.config.CommonMinerConfig.MinedCoinsPerNoOpBlock
+	if block.IsOp {
+		coins = b.config.CommonMinerConfig.MinedCoinsPerOpBlock
+	}
+	b.bank[block.MinerID] = b.bank[block.MinerID] + coins
+	return nil
 }
 
 func (b *BlockchainFS) createStageBlock() *blockchain.Block {
 	b.timer = nil
 	b.bank = b.stagingBank
 	b.FS = b.stagingFS
-	b.stagingBank = nil
-	b.FS = nil
+	// b.stagingBank = nil
+	// b.FS = nil
 	prevBlock := b.blockchain.GetLastBlock()
+	prevHash, err := prevBlock.ComputeHash()
+	if err != nil {
+		panic(err)
+	}
 	newBlock := blockchain.Block{
-		PrevHash:      prevBlock.GetComputedHash(),
+		PrevHash:      prevHash,
 		MinerID:       b.config.MinerID,
 		Nonce:         0,
 		IsOp:          true,
 		Ops:           b.stagingOps,
 		Confirmations: 0,
 	}
-	b.mine(&newBlock)
+	newBlock = *b.mine(&newBlock)
 	return &newBlock
-}
-
-//AddBlock adds mined block
-func (b *BlockchainFS) AddBlock(block *blockchain.Block) error {
-	err := b.blockchain.AppendBlock(block)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 //DONT LOOK FURTHER (FOR NOW)
@@ -243,6 +300,7 @@ func tryFindNonce(goID uint32, difficulty int, out chan blockchain.Block, block 
 		}
 		if valid {
 			out <- block
+			return
 		}
 	}
 }

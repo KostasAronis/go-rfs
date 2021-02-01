@@ -20,6 +20,8 @@ const (
 	OpBlock MSGType = 6
 	//NoopBlock message send by peer miners
 	NoopBlock MSGType = 7
+	//StoreAndStop stops the server and stores the blockchain to a file
+	StoreAndStop = 8
 )
 
 func (m MSGType) String() string {

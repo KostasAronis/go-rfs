@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DistributedClocks/GoVector/govec"
 	"github.com/KostasAronis/go-rfs/blockchain"
 	"github.com/KostasAronis/go-rfs/blockchainfs"
 	"github.com/KostasAronis/go-rfs/minerconfig"
@@ -41,30 +42,41 @@ type Miner struct {
 
 //New is a makeshift constructor for an initialized (but not started Miner)
 func New(minerConfig *minerconfig.Config) *Miner {
+	goVecConfig := govec.GetDefaultConfig()
+	goVecConfig.UseTimestamps = true
+	goVecConfig.AppendLog = true
+	govecLogger := govec.InitGoVector(minerConfig.MinerID, minerConfig.MinerID+"GoVector.log", goVecConfig)
 	m := Miner{
 		minerConfig: minerConfig,
 		Coins:       0,
 		peers:       []*tcp.Client{},
 		blockchainServer: &tcp.Server{
-			Address: minerConfig.IncomingMinersAddr,
+			ID:          minerConfig.MinerID,
+			Address:     minerConfig.IncomingMinersAddr,
+			GovecLogger: govecLogger,
 		},
 		clientServer: &tcp.Server{
-			Address: minerConfig.IncomingClientsAddr,
+			ID:          minerConfig.MinerID,
+			Address:     minerConfig.IncomingClientsAddr,
+			GovecLogger: govecLogger,
 		},
 		blockchainfs: &blockchainfs.BlockchainFS{},
+	}
+	for i := 0; i < len(m.minerConfig.PeerMinersAddrs); i++ {
+		c := tcp.Client{
+			ID:          m.minerConfig.MinerID,
+			Address:     m.minerConfig.OutgoingMinersIP,
+			Target:      m.minerConfig.PeerMinersAddrs[i],
+			GovecLogger: govecLogger,
+		}
+		m.peers = append(m.peers, &c)
 	}
 	return &m
 }
 
 //Start Starts the miner tcp servers, clients and starts mining for noop blocks
 func (m *Miner) Start() error {
-	for i := 0; i < len(m.minerConfig.PeerMinersAddrs); i++ {
-		c := tcp.Client{
-			Address: m.minerConfig.OutgoingMinersIP,
-			Target:  m.minerConfig.PeerMinersAddrs[i],
-		}
-		m.peers = append(m.peers, &c)
-	}
+
 	m.blockchainfs = &blockchainfs.BlockchainFS{}
 	err := m.blockchainfs.Init(m.minerConfig)
 	if err != nil {
@@ -112,6 +124,136 @@ func (m *Miner) handleClientConn(conn *tcp.Connection) {
 	log.Printf("client server recv: %s", msg.MSGType)
 	conn.Send <- m.handleClientMsg(msg)
 }
+func incorrectPayload() *tcp.Msg {
+	return &tcp.Msg{
+		MSGType: tcp.Error,
+		Payload: "Incorrect payload",
+	}
+}
+func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
+	switch msg.MSGType {
+	case tcp.CreateFile, tcp.AppendRec:
+		optype := blockchain.OpType(msg.MSGType)
+		payload, ok := msg.Payload.(map[string]interface{})
+		if !ok {
+			return incorrectPayload()
+		}
+		filename, ok := payload["Filename"]
+		if !ok {
+			return incorrectPayload()
+		}
+		record, ok := payload["Record"]
+		if !ok {
+			return incorrectPayload()
+		}
+		uuid, err := uuid.New()
+		if err != nil {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: err.Error(),
+			}
+		}
+		r := rfslib.Record{}
+		r.FromFloatArrayInterface(record)
+		op := blockchain.OpRecord{
+			OpType:   optype,
+			MinerID:  m.minerConfig.MinerID,
+			Filename: filename.(string),
+			Record:   &r,
+			UUID:     uuid,
+		}
+		op.OpType = optype
+		blockChan, err := m.blockchainfs.TryStageOp(&op)
+		if err != nil {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: err.Error(),
+			}
+		}
+		<-blockChan
+		return &tcp.Msg{
+			MSGType: msg.MSGType,
+			Payload: "OpAdded",
+		}
+
+	case tcp.ListFiles:
+		resPayload := m.blockchainfs.FS.ListFiles()
+		return &tcp.Msg{
+			MSGType: msg.MSGType,
+			Payload: resPayload,
+		}
+
+	case tcp.TotalRecs:
+		payload, ok := msg.Payload.(map[string]interface{})
+		if !ok {
+			return incorrectPayload()
+		}
+		filename, ok := payload["Filename"]
+		if !ok {
+			return incorrectPayload()
+		}
+		resPayload, err := m.blockchainfs.FS.TotalRecords(filename.(string))
+		if err != nil {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: err.Error(),
+			}
+		}
+		return &tcp.Msg{
+			MSGType: msg.MSGType,
+			Payload: resPayload,
+		}
+
+		// Read record operation on the rfs, no blocking
+	case tcp.ReadRec:
+		payload, ok := msg.Payload.(map[string]interface{})
+		if !ok {
+			return incorrectPayload()
+		}
+		filename, ok := payload["Filename"]
+		if !ok {
+			return incorrectPayload()
+		}
+		record, ok := payload["Record"]
+		if !ok {
+			return incorrectPayload()
+		}
+		indInterfaces, ok := record.([]interface{})
+		if !ok {
+			return incorrectPayload()
+		}
+		indexes := []int8{}
+		for _, v := range indInterfaces {
+			indexes = append(indexes, v.(int8))
+		}
+		resPayload := []*rfslib.Record{}
+		for index := range indexes {
+			record, err := m.blockchainfs.FS.ReadRecord(filename.(string), index)
+			if err != nil {
+				return &tcp.Msg{
+					MSGType: tcp.Error,
+					Payload: err.Error(),
+				}
+			}
+			resPayload = append(resPayload, record)
+		}
+		return &tcp.Msg{
+			MSGType: msg.MSGType,
+			Payload: resPayload,
+		}
+	case tcp.Error:
+	default:
+		return &tcp.Msg{
+			MSGType: tcp.Error,
+			Payload: "Incorrect MSGType",
+		}
+	}
+
+	return &tcp.Msg{
+		MSGType: tcp.Error,
+		Payload: "Incorrect MSGType",
+	}
+}
 
 func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
 	switch msg.MSGType {
@@ -122,18 +264,12 @@ func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
 	case tcp.NoopBlock:
 		payload, ok := msg.Payload.(map[string]interface{})
 		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
+			return incorrectPayload()
 		}
 		block := blockchain.Block{}
 		blockBytes, ok := payload["Block"]
 		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
+			return incorrectPayload()
 		}
 		err := json.Unmarshal(blockBytes.([]byte), &block)
 		if err != nil {
@@ -234,184 +370,12 @@ func (m *Miner) flood(msg *tcp.Msg) error {
 	wg.Wait()
 	return fmt.Errorf(strings.Join(errors, ", "))
 }
-func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
-	switch msg.MSGType {
-	case tcp.CreateFile:
-		optype := blockchain.OpType(msg.MSGType)
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		filename, ok := payload["Filename"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		record, ok := payload["Record"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		uuid, err := uuid.New()
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		op := blockchain.OpRecord{
-			OpType:   optype,
-			MinerID:  m.minerConfig.MinerID,
-			Filename: filename.(string),
-			Record:   record.(*rfslib.Record),
-			UUID:     uuid,
-		}
-		op.OpType = optype
-		blockChan, err := m.blockchainfs.TryStageOp(&op)
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		<-blockChan
-		return &tcp.Msg{
-			MSGType: msg.MSGType,
-			Payload: "OpAdded",
-		}
 
-	case tcp.AppendRec:
-		optype := blockchain.OpType(msg.MSGType)
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		filename, ok := payload["Filename"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		record, ok := payload["Record"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		uuid, err := uuid.New()
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		op := blockchain.OpRecord{
-			OpType:   optype,
-			MinerID:  m.minerConfig.MinerID,
-			Filename: filename.(string),
-			Record:   record.(*rfslib.Record),
-			UUID:     uuid,
-		}
-		op.OpType = optype
-		blockChan, err := m.blockchainfs.TryStageOp(&op)
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		<-blockChan
-		return &tcp.Msg{
-			MSGType: msg.MSGType,
-			Payload: "OpAdded",
-		}
-	case tcp.ListFiles:
-		resPayload := m.blockchainfs.FS.ListFiles()
-		return &tcp.Msg{
-			MSGType: msg.MSGType,
-			Payload: resPayload,
-		}
-	case tcp.TotalRecs:
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		filename, ok := payload["Filename"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		resPayload, err := m.blockchainfs.FS.TotalRecords(filename.(string))
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		return &tcp.Msg{
-			MSGType: msg.MSGType,
-			Payload: resPayload,
-		}
-	// Read record operation on the rfs, no blocking
-	case tcp.ReadRec:
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		filename, ok := payload["Filename"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		record, ok := payload["Record"]
-		if !ok {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload",
-			}
-		}
-		resPayload, err := m.blockchainfs.FS.ReadRecord(filename.(string), record.(int))
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: err.Error(),
-			}
-		}
-		return &tcp.Msg{
-			MSGType: msg.MSGType,
-			Payload: resPayload,
-		}
-	case tcp.Error:
-	default:
-		return &tcp.Msg{
-			MSGType: tcp.Error,
-			Payload: "Incorrect MSGType",
-		}
+func getRecord(i interface{}) *rfslib.Record {
+	arr := i.([]interface{})
+	r := rfslib.Record{}
+	for i, v := range arr {
+		r[i] = byte(v.(uint8))
 	}
-	return &tcp.Msg{
-		MSGType: tcp.Error,
-		Payload: "Incorrect MSGType",
-	}
+	return &r
 }
