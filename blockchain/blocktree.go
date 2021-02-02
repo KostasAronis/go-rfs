@@ -3,6 +3,7 @@ package blockchain
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 )
 
@@ -25,13 +26,18 @@ type BlockTree struct {
 }
 
 func (b *BlockTree) getLongestChain() []*Block {
-	maxChain := []*Block{}
+	maxLength := 0
+	maxChain := [][]*Block{}
 	for _, chain := range b.generateChains() {
-		if len(chain) > len(maxChain) {
-			maxChain = chain
+		if len(chain) == maxLength {
+			maxChain = append(maxChain, chain)
+		}
+		if len(chain) > maxLength {
+			maxLength = len(chain)
+			maxChain = [][]*Block{chain}
 		}
 	}
-	return maxChain
+	return maxChain[rand.Intn(len(maxChain))]
 }
 
 func (b *BlockTree) GetLastBlock() *Block {
