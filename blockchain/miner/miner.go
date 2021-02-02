@@ -172,11 +172,12 @@ func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 		r := rfslib.Record{}
 		r.FromFloatArrayInterface(record)
 		op := blockchain.OpRecord{
-			OpType:   optype,
-			MinerID:  m.minerConfig.MinerID,
-			Filename: filename.(string),
-			Record:   &r,
-			UUID:     uuid,
+			OpType:    optype,
+			MinerID:   m.minerConfig.MinerID,
+			Filename:  filename.(string),
+			Record:    &r,
+			UUID:      uuid,
+			Timestamp: time.Now().UTC(),
 		}
 		op.OpType = optype
 		blockChan, err := m.blockchainfs.TryStageOp(&op)
