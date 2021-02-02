@@ -4,71 +4,82 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/gob"
-	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 
 	"github.com/KostasAronis/go-rfs/blockchain"
 )
 
-func EncodeToBytes(p interface{}) []byte {
+func EncodeToBytes(p interface{}) ([]byte, error) {
 	buf := bytes.Buffer{}
 	enc := gob.NewEncoder(&buf)
 	err := enc.Encode(p)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	fmt.Println("uncompressed size (bytes): ", len(buf.Bytes()))
-	return buf.Bytes()
+	//fmt.Println("uncompressed size (bytes): ", len(buf.Bytes()))
+	return buf.Bytes(), nil
 }
 
-func Compress(s []byte) []byte {
+func Compress(s []byte) ([]byte, error) {
 	zipbuf := bytes.Buffer{}
 	zipped := gzip.NewWriter(&zipbuf)
-	zipped.Write(s)
-	zipped.Close()
-	fmt.Println("compressed size (bytes): ", len(zipbuf.Bytes()))
-	return zipbuf.Bytes()
+	_, err := zipped.Write(s)
+	if err != nil {
+		return nil, err
+	}
+	err = zipped.Close()
+	if err != nil {
+		return nil, err
+	}
+	//fmt.Println("compressed size (bytes): ", len(zipbuf.Bytes()))
+	return zipbuf.Bytes(), nil
 }
 
-func Decompress(s []byte) []byte {
+func Decompress(s []byte) ([]byte, error) {
 	rdr, _ := gzip.NewReader(bytes.NewReader(s))
 	data, err := ioutil.ReadAll(rdr)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	rdr.Close()
-	fmt.Println("uncompressed size (bytes): ", len(data))
-	return data
+	err = rdr.Close()
+	if err != nil {
+		return nil, err
+	}
+	//fmt.Println("uncompressed size (bytes): ", len(data))
+	return data, nil
 }
 
-func DecodeToBlockTree(s []byte) blockchain.BlockTree {
+func DecodeToBlockTree(s []byte) (*blockchain.BlockTree, error) {
 	p := blockchain.BlockTree{}
 	dec := gob.NewDecoder(bytes.NewReader(s))
 	err := dec.Decode(&p)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	return p
+	return &p, nil
 }
 
-func WriteToFile(s []byte, file string) {
+func WriteToFile(s []byte, file string) error {
 	f, err := os.Create(file)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	f.Write(s)
+	_, err = f.Write(s)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func ReadFromFile(path string) []byte {
+func ReadFromFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	data, err := ioutil.ReadAll(f)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	return data
+	return data, nil
 }

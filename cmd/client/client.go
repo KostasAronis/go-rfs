@@ -55,6 +55,8 @@ func main() {
 func handleAction(args ...string) {
 	action := args[1]
 	switch action {
+	case "save":
+		saveAndExit()
 	case "ls":
 		listFiles()
 	case "cat":
@@ -100,6 +102,19 @@ func handleAction(args ...string) {
 	}
 }
 
+func saveAndExit() {
+	msg := tcp.Msg{
+		MSGType: tcp.StoreAndStop,
+		Payload: map[string]interface{}{},
+	}
+	res, err := send(&msg)
+	if err != nil {
+		panic(err)
+	}
+	resMap := res.(map[string]interface{})
+	filename := resMap["Filename"]
+	log.Printf("Stored in file: %s", filename)
+}
 func getRecords(filename string, indexes []int) {
 	msg := tcp.Msg{
 		MSGType: tcp.ReadRec,

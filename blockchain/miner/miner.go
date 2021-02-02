@@ -7,9 +7,10 @@ package miner
 */
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type Miner struct {
 	pendingOperations []*blockchain.OpRecord
 	timer             *time.Timer
 	OpBlockProduced   chan *blockchain.Block
+	exitError         chan error
 }
 
 //New is a makeshift constructor for an initialized (but not started Miner)
@@ -76,13 +78,17 @@ func New(minerConfig *minerconfig.Config) *Miner {
 
 //Start Starts the miner tcp servers, clients and starts mining for noop blocks
 func (m *Miner) Start() error {
-
+	m.exitError = make(chan error)
 	m.blockchainfs = &blockchainfs.BlockchainFS{}
 	err := m.blockchainfs.Init(m.minerConfig)
 	if err != nil {
 		return err
 	}
 	err = m.startListeningTCP()
+	if err != nil {
+		return err
+	}
+	err = <-m.exitError
 	return err
 }
 
@@ -99,24 +105,34 @@ func (m *Miner) startListeningTCP() error {
 		return err
 	}
 	log.Printf("client server listening on: %s\n", m.minerConfig.IncomingClientsAddr)
-	for {
-		select {
-		case conn, ok := <-blockChainConnections:
-			if ok {
-				go m.handleBlockchainConn(conn)
-			}
-		case conn, ok := <-clientConnections:
-			if ok {
-				go m.handleClientConn(conn)
+	go func() {
+		for {
+			select {
+			case conn, ok := <-blockChainConnections:
+				if ok {
+					go m.handleBlockchainConn(conn)
+				}
+			case conn, ok := <-clientConnections:
+				if ok {
+					go m.handleClientConn(conn)
+				}
 			}
 		}
-	}
+	}()
+	return nil
 }
 
 func (m *Miner) handleBlockchainConn(conn *tcp.Connection) {
 	msg := <-conn.Recv
 	log.Printf("blockchain server recv: %s", msg.MSGType)
 	conn.Send <- m.handleBlockchainMsg(msg)
+}
+
+func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
+	return &tcp.Msg{
+		MSGType: tcp.Error,
+		Payload: "NIY",
+	}
 }
 
 func (m *Miner) handleClientConn(conn *tcp.Connection) {
@@ -174,6 +190,29 @@ func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 		return &tcp.Msg{
 			MSGType: msg.MSGType,
 			Payload: "OpAdded",
+		}
+
+	//DEBUG MSG ONLY! CLIENT SHOULDNT CONTROL MINER!
+	case tcp.StoreAndStop:
+		timestamp := time.Now().Format(time.RFC3339)
+		baseFilename := m.clientServer.ID + "_" + timestamp + ".dat"
+		filename := getUnusedFilenameToStore(baseFilename)
+		err := m.blockchainfs.Store(filename)
+		if err != nil {
+			return &tcp.Msg{
+				MSGType: tcp.Error,
+				Payload: err.Error(),
+			}
+		}
+		go func() {
+			time.After(500 * time.Millisecond)
+			m.exitError <- nil
+		}()
+		return &tcp.Msg{
+			MSGType: tcp.StoreAndStop,
+			Payload: map[string]interface{}{
+				"Filename": filename,
+			},
 		}
 
 	case tcp.ListFiles:
@@ -255,99 +294,6 @@ func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 	}
 }
 
-func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
-	switch msg.MSGType {
-	//TODO: IMPLEMENT IF NEEDED
-	// case tcp.CreateFile:
-	// case tcp.AppendRec:
-	case tcp.OpBlock:
-	case tcp.NoopBlock:
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			return incorrectPayload()
-		}
-		block := blockchain.Block{}
-		blockBytes, ok := payload["Block"]
-		if !ok {
-			return incorrectPayload()
-		}
-		err := json.Unmarshal(blockBytes.([]byte), &block)
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "Incorrect payload: " + err.Error(),
-			}
-		}
-		if block.IsOp {
-			if err != nil {
-				return &tcp.Msg{
-					MSGType: tcp.Error,
-					Payload: "op error: " + err.Error(),
-				}
-			}
-		}
-		//err = m.appendBlock(&block)
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "block error: " + err.Error(),
-			}
-		}
-		err = m.flood(msg)
-		if err != nil {
-			return &tcp.Msg{
-				MSGType: tcp.Error,
-				Payload: "flood error: " + err.Error(),
-			}
-		}
-	default:
-		return &tcp.Msg{
-			MSGType: tcp.Error,
-			Payload: "NIY",
-		}
-	}
-	return &tcp.Msg{
-		MSGType: tcp.Error,
-		Payload: "NIY",
-	}
-}
-
-// func (m *Miner) appendBlock(block *blockchain.Block) error {
-// 	err := m.applyBlockOps(block)
-// 	err = m.blockchain.AppendBlock(block)
-// 	return err
-// }
-
-// func (m *Miner) applyBlockOps(block *blockchain.Block) error {
-// 	stagingFS := m.fs.Clone()
-// 	stagingBank := map[string]int{}
-// 	for k, v := range m.bank {
-// 		stagingBank[k] = v
-// 	}
-// 	for _, op := range block.Ops {
-// 		if op.OpType == blockchain.CreateFile {
-// 			minerCoins, ok := stagingBank[op.MinerID]
-// 			if !ok {
-// 				return errors.New(op.MinerID + " invalid coin count")
-// 			}
-// 			if minerCoins-m.minerConfig.CommonMinerConfig.NumCoinsPerFileCreate < 0 {
-// 				return errors.New(op.MinerID + " invalid coin count")
-// 			}
-// 			stagingBank[op.MinerID] = minerCoins - m.minerConfig.CommonMinerConfig.NumCoinsPerFileCreate
-// 			_, err := stagingFS.AddFile(op.Filename)
-// 			if err != nil {
-// 				return err
-// 			}
-// 		}
-// 		if op.OpType == blockchain.AppendRec {
-// 			_, err := stagingFS.AppendRecord(op.Filename, op.Record)
-// 			if err != nil {
-// 				return err
-// 			}
-// 		}
-// 	}
-// 	return nil
-// }
 func (m *Miner) flood(msg *tcp.Msg) error {
 	errors := []string{}
 	mutex := sync.Mutex{}
@@ -378,4 +324,20 @@ func getRecord(i interface{}) *rfslib.Record {
 		r[i] = byte(v.(uint8))
 	}
 	return &r
+}
+func getUnusedFilenameToStore(baseFilename string) string {
+	_, err := os.Stat(baseFilename)
+	if os.IsNotExist(err) {
+		return baseFilename
+	}
+	split := strings.Split(baseFilename, ".")
+	iStr := split[len(split)-1]
+	i, err := strconv.Atoi(iStr)
+	var newFilename string
+	if err != nil {
+		i = 1
+		newFilename = strings.Join(split, ".") + strconv.Itoa(i)
+	}
+	newFilename = strings.Join(split[:len(split)-1], ".") + strconv.Itoa(i)
+	return getUnusedFilenameToStore(newFilename)
 }

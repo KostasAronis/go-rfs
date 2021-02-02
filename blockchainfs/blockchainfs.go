@@ -121,14 +121,25 @@ func (b *BlockchainFS) initBlockchain() error {
 	}
 	return nil
 }
-func (b *BlockchainFS) Store(filename string) {
-	bytes := serialization.EncodeToBytes(b.blockchain)
-	serialization.WriteToFile(bytes, filename)
+func (b *BlockchainFS) Store(filename string) error {
+	bytes, err := serialization.EncodeToBytes(b.blockchain)
+	if err != nil {
+		return err
+	}
+	err = serialization.WriteToFile(bytes, filename)
+	return err
 }
-func (b *BlockchainFS) Restore(filename string) {
-	bytes := serialization.ReadFromFile(filename)
-	blockTree := serialization.DecodeToBlockTree(bytes)
-	b.blockchain = &blockTree
+func (b *BlockchainFS) Restore(filename string) error {
+	bytes, err := serialization.ReadFromFile(filename)
+	if err != nil {
+		return err
+	}
+	blockTree, err := serialization.DecodeToBlockTree(bytes)
+	if err != nil {
+		return err
+	}
+	b.blockchain = blockTree
+	return nil
 }
 func (b *BlockchainFS) mineNOOP(block *blockchain.Block, done chan *blockchain.Block) {
 	block = b.mine(block)
