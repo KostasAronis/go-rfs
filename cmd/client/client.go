@@ -205,9 +205,10 @@ func touch(filename string) {
 
 func send(msg *tcp.Msg) (interface{}, error) {
 	c := tcp.Client{
-		ID:      "c_1",
-		Address: "who cares",
-		Target:  ":8001",
+		ID:         "c_1",
+		Address:    "who cares",
+		TargetAddr: ":8001",
+		TargetID:   "1",
 	}
 	res := c.Send(msg)
 	if res.MSGType == tcp.Error {
