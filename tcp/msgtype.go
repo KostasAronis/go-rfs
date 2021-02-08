@@ -16,12 +16,10 @@ const (
 	TotalRecs MSGType = 4
 	//ReadRec message send by client
 	ReadRec MSGType = 5
-	//OpBlock message send by peer miners
-	OpBlock MSGType = 6
-	//NoopBlock message send by peer miners
-	NoopBlock MSGType = 7
+	//Block message send by peer miners
+	Block MSGType = 6
 	//StoreAndStop stops the server and stores the blockchain to a file
-	StoreAndStop = 8
+	StoreAndStop = 7
 )
 
 func (m MSGType) String() string {
@@ -38,11 +36,9 @@ func (m MSGType) String() string {
 		return "TotalRecs"
 	case ReadRec:
 		return "ReadRec"
-	case OpBlock:
-		return "OpBlock"
-	case NoopBlock:
-		return "NoopBlock"
+	case Block:
+		return "Block"
 	default:
-		return string(m)
+		return "UnknownMsg"
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/DistributedClocks/GoVector/govec"
@@ -20,6 +19,7 @@ import (
 	"github.com/KostasAronis/go-rfs/blockchainfs"
 	"github.com/KostasAronis/go-rfs/minerconfig"
 	"github.com/KostasAronis/go-rfs/rfslib"
+	"github.com/KostasAronis/go-rfs/serialization"
 	"github.com/KostasAronis/go-rfs/tcp"
 	"github.com/KostasAronis/go-rfs/uuid"
 )
@@ -38,16 +38,18 @@ type Miner struct {
 	clientServer      *tcp.Server
 	pendingOperations []*blockchain.OpRecord
 	timer             *time.Timer
-	OpBlockProduced   chan *blockchain.Block
+	blockToFlood      chan *blockchain.Block
+	opToFlood         chan *blockchain.OpRecord
 	exitError         chan error
 }
 
 //New is a makeshift constructor for an initialized (but not started Miner)
 func New(minerConfig *minerconfig.Config) *Miner {
-	goVecConfig := govec.GetDefaultConfig()
-	goVecConfig.UseTimestamps = true
-	goVecConfig.AppendLog = true
-	govecLogger := govec.InitGoVector(minerConfig.MinerID, minerConfig.MinerID+"GoVector.log", goVecConfig)
+	govecConfig := govec.GetDefaultConfig()
+	govecConfig.UseTimestamps = true
+	govecConfig.AppendLog = true
+	govecLogger := govec.InitGoVector(minerConfig.MinerID, minerConfig.MinerID+"GoVector.log", govecConfig)
+	blockToFlood := make(chan *blockchain.Block, 10)
 	m := Miner{
 		minerConfig: minerConfig,
 		Coins:       0,
@@ -62,13 +64,19 @@ func New(minerConfig *minerconfig.Config) *Miner {
 			Address:     minerConfig.IncomingClientsAddr,
 			GovecLogger: govecLogger,
 		},
-		blockchainfs: &blockchainfs.BlockchainFS{},
+		blockchainfs: &blockchainfs.BlockchainFS{
+			BlockToFlood: blockToFlood,
+			GovecLogger:  govecLogger,
+		},
+		blockToFlood: blockToFlood,
+		opToFlood:    make(chan *blockchain.OpRecord),
 	}
 	for i := 0; i < len(m.minerConfig.PeerMinersAddrs); i++ {
 		c := tcp.Client{
 			ID:          m.minerConfig.MinerID,
 			Address:     m.minerConfig.OutgoingMinersIP,
-			Target:      m.minerConfig.PeerMinersAddrs[i],
+			TargetID:    string(m.minerConfig.PeerMinersAddrs[i][len(m.minerConfig.PeerMinersAddrs[i])-1]),
+			TargetAddr:  m.minerConfig.PeerMinersAddrs[i],
 			GovecLogger: govecLogger,
 		}
 		m.peers = append(m.peers, &c)
@@ -79,7 +87,7 @@ func New(minerConfig *minerconfig.Config) *Miner {
 //Start Starts the miner tcp servers, clients and starts mining for noop blocks
 func (m *Miner) Start() error {
 	m.exitError = make(chan error)
-	m.blockchainfs = &blockchainfs.BlockchainFS{}
+	go m.floodToPeers()
 	err := m.blockchainfs.Init(m.minerConfig)
 	if err != nil {
 		return err
@@ -129,6 +137,36 @@ func (m *Miner) handleBlockchainConn(conn *tcp.Connection) {
 }
 
 func (m *Miner) handleBlockchainMsg(msg *tcp.Msg) *tcp.Msg {
+	log.Println("got Blockchain msg")
+	switch msg.MSGType {
+	case tcp.Block:
+		blockBytes, ok := msg.Payload.([]byte)
+		if !ok {
+			return incorrectPayload()
+		}
+		block, err := serialization.DecodeToBlock(blockBytes)
+		if err != nil {
+			return errorPayload(err)
+		}
+		h, err := block.ComputeHash()
+		if err != nil {
+			return errorPayload(err)
+		}
+		if m.blockchainfs.BlockExists(h) {
+			return msg
+		}
+		err = m.blockchainfs.AddExternalBlock(block)
+		if err != nil {
+			return errorPayload(err)
+		}
+		return msg
+	case tcp.CreateFile, tcp.AppendRec:
+	default:
+		return &tcp.Msg{
+			MSGType: tcp.Error,
+			Payload: "NIY",
+		}
+	}
 	return &tcp.Msg{
 		MSGType: tcp.Error,
 		Payload: "NIY",
@@ -144,6 +182,12 @@ func incorrectPayload() *tcp.Msg {
 	return &tcp.Msg{
 		MSGType: tcp.Error,
 		Payload: "Incorrect payload",
+	}
+}
+func errorPayload(err error) *tcp.Msg {
+	return &tcp.Msg{
+		MSGType: tcp.Error,
+		Payload: err.Error(),
 	}
 }
 func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
@@ -295,26 +339,86 @@ func (m *Miner) handleClientMsg(msg *tcp.Msg) *tcp.Msg {
 	}
 }
 
-func (m *Miner) flood(msg *tcp.Msg) error {
-	errors := []string{}
-	mutex := sync.Mutex{}
-	wg := sync.WaitGroup{}
-	for _, client := range m.peers {
-		if client.ID != msg.ClientID {
-			wg.Add(1)
-			go func(c *tcp.Client) {
-				res := c.Send(msg)
-				if res.MSGType == tcp.Error {
-					mutex.Lock()
-					defer mutex.Unlock()
-					err := res.Payload.(string)
-					errors = append(errors, c.Target+": "+err)
-					wg.Done()
-				}
-			}(client)
+func (m *Miner) floodToPeers() {
+	log.Println("listening for flood msg")
+	for {
+		log.Println("listening for flood msg_START")
+		select {
+		case block := <-m.blockToFlood:
+			log.Println("got block to flood")
+			m.floodBlock(block)
+			log.Println("flooded block")
+		case op := <-m.opToFlood:
+			m.floodOp(op)
+		}
+		log.Println("listening for flood msg_END")
+	}
+}
+
+func (m *Miner) floodBlock(block *blockchain.Block) {
+	log.Println("flooding block to peers")
+	clientsToSend := []*tcp.Client{}
+	for _, c := range m.peers {
+		if c.TargetID != block.MinerID {
+			clientsToSend = append(clientsToSend, c)
 		}
 	}
-	wg.Wait()
+	blockBytes, err := serialization.EncodeToBytes(block)
+	if err != nil {
+		log.Printf("error in encoding: %s", err.Error())
+		return
+	}
+	msg := tcp.Msg{
+		ClientID: m.minerConfig.MinerID,
+		MSGType:  tcp.Block,
+		Payload:  blockBytes,
+	}
+	err = m.flood(&msg, clientsToSend)
+	if err != nil {
+		log.Printf("error in flooding: %s", err.Error())
+	}
+}
+func (m *Miner) floodOp(op *blockchain.OpRecord) {
+	log.Println("flooding block to peers")
+	clientsToSend := []*tcp.Client{}
+	for _, c := range m.peers {
+		if c.TargetID != op.MinerID {
+			clientsToSend = append(clientsToSend, c)
+		}
+	}
+	msg := tcp.Msg{
+		ClientID: m.minerConfig.MinerID,
+		MSGType:  tcp.MSGType(op.OpType),
+		Payload:  op,
+	}
+	err := m.flood(&msg, clientsToSend)
+	if err != nil {
+		log.Printf("error in flooding: %s", err.Error())
+	}
+}
+
+//TODO: FIX ERROR HANDLING ON MULTIPLE CLIENTS. FFS
+func (m *Miner) flood(msg *tcp.Msg, peers []*tcp.Client) error {
+	errors := []string{}
+	//mutex := sync.Mutex{}
+	//wg := sync.WaitGroup{}
+	for _, client := range peers {
+		//wg.Add(1)
+		go func(c *tcp.Client) {
+			log.Printf("flood to peer: %s ", c.TargetID)
+			res := c.Send(msg)
+			log.Printf("got res from peer: %s, %s ", c.TargetID, res.MSGType.String())
+			// if res.MSGType == tcp.Error {
+			// 	mutex.Lock()
+			// 	defer mutex.Unlock()
+			// 	err := res.Payload.(string)
+			// 	errors = append(errors, c.TargetID+": "+err)
+			// 	log.Printf("done flooding to peer: %s ", c.TargetID)
+			// 	wg.Done()
+			// }
+		}(client)
+	}
+	//wg.Wait()
 	return fmt.Errorf(strings.Join(errors, ", "))
 }
 

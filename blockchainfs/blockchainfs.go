@@ -1,12 +1,16 @@
+// Package blockchainfs
 package blockchainfs
 
 import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
+	"os"
+	"os/signal"
+	"sync/atomic"
 	"time"
 
+	"github.com/DistributedClocks/GoVector/govec"
 	"github.com/KostasAronis/go-rfs/blockchain"
 	"github.com/KostasAronis/go-rfs/filesystem"
 	"github.com/KostasAronis/go-rfs/minerconfig"
@@ -14,16 +18,23 @@ import (
 )
 
 const maxNonce uint32 = 4294967295
-const goRoutineCount = 5
+const goRoutineCount = 2
 
+//BlockchainFS contains most of the logic for the operations between the blockchain and the fs
+//TODO: nil checks on type properties is communicating by sharing memory. It should be the oposite. NEEDS MOAR CHAN!!!
+//TODO: less type properties, more functional methods! Do not keep channels _loose_ on the _global_ scope.
 type BlockchainFS struct {
+	BlockToFlood chan *blockchain.Block
+	GovecLogger  *govec.GoLog
 	//on init
-	config         *minerconfig.Config
-	pauseNoopChan  chan bool
-	resumeNoopChan chan bool
-	blockchain     *blockchain.BlockTree
-	FS             *filesystem.FileSystem
-	bank           map[string]int
+	config          *minerconfig.Config
+	pauseNoopChan   chan bool
+	resumeNoopChan  chan bool
+	resetOpMineChan chan bool
+	isMiningOp      uint32
+	blockchain      *blockchain.BlockTree
+	FS              *filesystem.FileSystem
+	bank            map[string]int
 	//on new staging
 	timer              *time.Timer
 	stagingOps         []*blockchain.OpRecord
@@ -31,8 +42,7 @@ type BlockchainFS struct {
 	stagingBank        map[string]int
 	waitingClientBlock []chan *blockchain.Block
 	//unused?
-	producedBlock    chan *blockchain.Block
-	waitingClientErr []chan error
+	currentlyMinedHash atomic.Value
 }
 
 //Init initializes BlockchainFS
@@ -47,12 +57,24 @@ func (b *BlockchainFS) Init(config *minerconfig.Config) error {
 	b.bank = map[string]int{}
 	b.pauseNoopChan = make(chan bool)
 	b.resumeNoopChan = make(chan bool)
-	go b.mineForever(b.pauseNoopChan, b.resumeNoopChan)
+	b.resetOpMineChan = make(chan bool)
+	atomic.StoreUint32(&b.isMiningOp, 0)
+	go b.mineForever()
+	go func() {
+		SIGINT := make(chan os.Signal, 1)
+		signal.Notify(SIGINT, os.Interrupt)
+		<-SIGINT
+		err := b.Store("./data" + b.config.MinerID + ".bin")
+		if err != nil {
+			panic(err)
+		}
+		os.Exit(42)
+	}()
 	return nil
 }
 
 //AddBlock adds mined block
-func (b *BlockchainFS) AddBlock(block *blockchain.Block) error {
+func (b *BlockchainFS) addBlock(block *blockchain.Block) error {
 	err := b.blockchain.AppendBlock(block)
 	if err != nil {
 		return err
@@ -111,7 +133,6 @@ func (b *BlockchainFS) initBlockchain() error {
 		return fmt.Errorf("incorrect genesis block hash given: %s != %s :computed", b.config.CommonMinerConfig.GenesisBlockHash, genesisBlockHash)
 	}
 	b.blockchain = &blockchain.BlockTree{
-		M:           &sync.Mutex{},
 		GenesisNode: &genesisBlock,
 		Blocks: []*blockchain.Block{
 			&genesisBlock,
@@ -119,14 +140,22 @@ func (b *BlockchainFS) initBlockchain() error {
 		NoopDiff: b.config.CommonMinerConfig.PowPerNoOpBlock,
 		OpDiff:   b.config.CommonMinerConfig.PowPerOpBlock,
 	}
+	b.blockchain.Init()
 	return nil
 }
+
+func (b *BlockchainFS) BlockExists(hash string) bool {
+	block := b.blockchain.GetBlockByHash(hash)
+	return block != nil
+}
+
 func (b *BlockchainFS) Store(filename string) error {
 	bytes, err := serialization.EncodeToBytes(b.blockchain)
 	if err != nil {
 		return err
 	}
 	err = serialization.WriteToFile(bytes, filename)
+	log.Println("stored")
 	return err
 }
 func (b *BlockchainFS) Restore(filename string) error {
@@ -141,81 +170,6 @@ func (b *BlockchainFS) Restore(filename string) error {
 	b.blockchain = blockTree
 	return nil
 }
-func (b *BlockchainFS) mineNOOP(block *blockchain.Block, done chan *blockchain.Block) {
-	block = b.mine(block)
-	done <- block
-}
-
-func (b *BlockchainFS) startMiningNoop(done chan *blockchain.Block, stop chan bool) {
-	prevHash, err := b.blockchain.GetLastBlock().ComputeHash()
-	if err != nil {
-		panic(err)
-	}
-	noop := blockchain.Block{
-		PrevHash: prevHash,
-		MinerID:  b.config.MinerID,
-		IsOp:     false,
-	}
-	noopMined := make(chan *blockchain.Block)
-	go b.mineNOOP(&noop, noopMined)
-	for {
-		select {
-		case <-stop:
-			return
-		case block := <-noopMined:
-			done <- block
-		}
-	}
-}
-
-func canStartNoOp() bool {
-	m := sync.Mutex{}
-	m.Lock()
-	m.Unlock()
-	return true
-}
-
-func (b *BlockchainFS) mineForever(pause chan bool, resume chan bool) {
-	log.Println("started mining")
-	for {
-		log.Println("new mining loop")
-		noopMined := make(chan *blockchain.Block, 1)
-		stopChan := make(chan bool, 1)
-		go b.startMiningNoop(noopMined, stopChan)
-		for {
-			select {
-			case noopBlock := <-noopMined:
-				h, err := noopBlock.ComputeHash()
-				if err != nil {
-					panic(err)
-				}
-				log.Printf("mined noop block: %s\n", h)
-				err = b.tryAddBlock(noopBlock)
-				if err != nil {
-					panic(err)
-				}
-				log.Printf("added noop block: %s\n", h)
-				break
-			case <-pause:
-				log.Println("noop mining paused")
-				<-resume
-				log.Println("noop mining resumed")
-				break
-			}
-			break
-		}
-	}
-}
-
-func (b *BlockchainFS) initStaging() {
-	b.stagingFS = b.FS.Clone()
-	b.stagingBank = map[string]int{}
-	for k, v := range b.bank {
-		b.stagingBank[k] = v
-	}
-
-	b.waitingClientBlock = []chan *blockchain.Block{}
-}
 
 func (b *BlockchainFS) startTimer() {
 	log.Println("started timer on new op batch")
@@ -224,7 +178,10 @@ func (b *BlockchainFS) startTimer() {
 		<-b.timer.C
 		log.Println("started mining new op block")
 		b.pauseNoopChan <- true
-		newBlock := b.createStageBlock()
+		b.timer = nil
+		b.bank = b.stagingBank
+		b.FS = b.stagingFS
+		newBlock := b.createStageBlock(b.stagingOps)
 		hash, err := newBlock.ComputeHash()
 		if err != nil {
 			panic(err)
@@ -242,25 +199,8 @@ func (b *BlockchainFS) startTimer() {
 	}()
 }
 
-func (b *BlockchainFS) tryAddBlock(block *blockchain.Block) error {
-	err := b.AddBlock(block)
-	if err != nil {
-		panic(err)
-	}
-	coins := b.config.CommonMinerConfig.MinedCoinsPerNoOpBlock
-	if block.IsOp {
-		coins = b.config.CommonMinerConfig.MinedCoinsPerOpBlock
-	}
-	b.bank[block.MinerID] = b.bank[block.MinerID] + coins
-	return nil
-}
-
-func (b *BlockchainFS) createStageBlock() *blockchain.Block {
-	b.timer = nil
-	b.bank = b.stagingBank
-	b.FS = b.stagingFS
-	// b.stagingBank = nil
-	// b.FS = nil
+func (b *BlockchainFS) createStageBlock(stagingOps []*blockchain.OpRecord) *blockchain.Block {
+	atomic.StoreUint32(&b.isMiningOp, 1)
 	prevBlock := b.blockchain.GetLastBlock()
 	prevHash, err := prevBlock.ComputeHash()
 	if err != nil {
@@ -271,33 +211,151 @@ func (b *BlockchainFS) createStageBlock() *blockchain.Block {
 		MinerID:       b.config.MinerID,
 		Nonce:         0,
 		IsOp:          true,
-		Ops:           b.stagingOps,
+		Ops:           stagingOps,
 		Confirmations: 0,
 	}
-	newBlock = *b.mine(&newBlock)
-	return &newBlock
+	mined := make(chan *blockchain.Block)
+	stopChan := make(chan bool)
+	go b.mine(&newBlock, mined, stopChan)
+	select {
+	case minedBlock := <-mined:
+		atomic.StoreUint32(&b.isMiningOp, 0)
+		return minedBlock
+	case <-b.resetOpMineChan:
+		stopChan <- true
+		return b.createStageBlock(stagingOps)
+	}
+}
+
+func (b *BlockchainFS) startMiningNoop(out chan *blockchain.Block, stop chan bool) {
+	prevHash, err := b.blockchain.GetLastBlock().ComputeHash()
+	if err != nil {
+		panic(err)
+	}
+	noop := blockchain.Block{
+		PrevHash: prevHash,
+		MinerID:  b.config.MinerID,
+		IsOp:     false,
+	}
+	go b.mine(&noop, out, stop)
+}
+
+func (b *BlockchainFS) mineForever() {
+	log.Println("started mining")
+	for {
+		log.Println("new mining loop")
+		noopMined := make(chan *blockchain.Block, 1)
+		stopChan := make(chan bool, 1)
+		go b.startMiningNoop(noopMined, stopChan)
+		for {
+			log.Println("for_START")
+			select {
+			case noopBlock := <-noopMined:
+				h, err := noopBlock.ComputeHash()
+				if err != nil {
+					panic(err)
+				}
+				log.Printf("mined noop block: %s\n", h)
+				err = b.tryAddBlock(noopBlock)
+				if err != nil {
+					panic(err)
+				}
+				log.Printf("added noop block: %s\n", h)
+				break
+			case <-b.pauseNoopChan:
+				stopChan <- true
+				log.Println("noop mining paused")
+				<-b.resumeNoopChan
+				log.Println("noop mining resumed")
+				break
+			}
+			log.Println("for_END")
+			break
+		}
+	}
+}
+
+func (b *BlockchainFS) initStaging() {
+	b.stagingFS = b.FS.Clone()
+	b.stagingBank = map[string]int{}
+	for k, v := range b.bank {
+		b.stagingBank[k] = v
+	}
+
+	b.waitingClientBlock = []chan *blockchain.Block{}
+}
+
+func (b *BlockchainFS) tryAddBlock(block *blockchain.Block) error {
+	err := b.addBlock(block)
+	if err != nil {
+		return err
+	}
+	coins := b.config.CommonMinerConfig.MinedCoinsPerNoOpBlock
+	if block.IsOp {
+		coins = b.config.CommonMinerConfig.MinedCoinsPerOpBlock
+	}
+	b.bank[block.MinerID] = b.bank[block.MinerID] + coins
+	log.Println("flooding block")
+	b.BlockToFlood <- block
+	return nil
+}
+
+func (b *BlockchainFS) AddExternalBlock(block *blockchain.Block) error {
+	//TODO:!!! this should be pause-start and not reset (WHAT IF Mining was faster than opchecking & block adding)...
+	if atomic.LoadUint32(&b.isMiningOp) == 1 {
+		log.Println("reseting op for External block")
+		b.resetOpMineChan <- true
+	} else {
+		log.Println("pausing noop for External block")
+		b.pauseNoopChan <- true
+	}
+	err := b.tryAddBlock(block)
+	if err != nil {
+		return err
+	}
+	if atomic.LoadUint32(&b.isMiningOp) != 1 {
+		b.resumeNoopChan <- true
+	}
+	return nil
 }
 
 //DONT LOOK FURTHER (FOR NOW)
 //Mine Works on solving a block nonce
-func (b *BlockchainFS) mine(block *blockchain.Block) *blockchain.Block {
+func (b *BlockchainFS) mine(block *blockchain.Block, out chan *blockchain.Block, stop chan bool) {
 	var difficulty int
 	if block.IsOp {
 		difficulty = b.config.CommonMinerConfig.PowPerOpBlock
 	} else {
 		difficulty = b.config.CommonMinerConfig.PowPerNoOpBlock
 	}
-	block = calculateNonceParallel(block, difficulty)
-	return block
+	parallelOut := make(chan *blockchain.Block)
+	go calculateNonceParallel(block, difficulty, parallelOut, stop)
+	blockType := "NoOp"
+	if block.IsOp {
+		blockType = "Op"
+	}
+	for {
+		select {
+		case <-stop:
+			b.GovecLogger.LogLocalEvent("stopping mining "+blockType+" block", govec.GoLogOptions{Priority: govec.INFO})
+		case minedBlock := <-parallelOut:
+			b.GovecLogger.LogLocalEvent("done mining "+blockType+" block", govec.GoLogOptions{Priority: govec.INFO})
+			out <- minedBlock
+		}
+	}
 }
 
-func calculateNonceParallel(block *blockchain.Block, difficulty int) *blockchain.Block {
-	out := make(chan blockchain.Block)
+func calculateNonceParallel(block *blockchain.Block, difficulty int, out chan *blockchain.Block, stop chan bool) {
+	parallelOut := make(chan blockchain.Block)
 	for i := 0; i < goRoutineCount; i++ {
-		go tryFindNonce(uint32(i), difficulty, out, *block)
+		go tryFindNonce(uint32(i), difficulty, parallelOut, *block)
 	}
-	minedBlock := <-out
-	return &minedBlock
+	select {
+	case <-stop:
+		return
+	case minedBlock := <-parallelOut:
+		out <- &minedBlock
+	}
 }
 
 func tryFindNonce(goID uint32, difficulty int, out chan blockchain.Block, block blockchain.Block) {
