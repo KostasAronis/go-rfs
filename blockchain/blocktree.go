@@ -18,31 +18,33 @@ type BlockTreeNode struct {
 }
 
 type BlockTree struct {
-	M           *sync.Mutex
+	m           *sync.RWMutex
 	GenesisNode *Block
 	Blocks      []*Block
 	OpDiff      int
 	NoopDiff    int
 }
 
-func (b *BlockTree) getLongestChain() []*Block {
-	maxLength := 0
-	maxChain := [][]*Block{}
-	for _, chain := range b.generateChains() {
-		if len(chain) == maxLength {
-			maxChain = append(maxChain, chain)
+func (b *BlockTree) Init() {
+	b.m = &sync.RWMutex{}
+}
+
+func (b *BlockTree) GetBlockByHash(hash string) *Block {
+	for _, block := range b.Blocks {
+		h, err := block.ComputeHash()
+		if err != nil {
+			panic(err)
 		}
-		if len(chain) > maxLength {
-			maxLength = len(chain)
-			maxChain = [][]*Block{chain}
+		if h == hash {
+			return block
 		}
 	}
-	return maxChain[rand.Intn(len(maxChain))]
+	return nil
 }
 
 func (b *BlockTree) GetLastBlock() *Block {
-	b.M.Lock()
-	defer b.M.Unlock()
+	b.m.RLock()
+	defer b.m.RUnlock()
 	longestChain := b.getLongestChain()
 	if len(longestChain) > 0 {
 		return longestChain[len(longestChain)-1]
@@ -51,8 +53,8 @@ func (b *BlockTree) GetLastBlock() *Block {
 }
 
 func (b *BlockTree) AppendBlock(block *Block) error {
-	b.M.Lock()
-	defer b.M.Unlock()
+	b.m.Lock()
+	defer b.m.Unlock()
 	valid, err := b.validNode(block, 1)
 	if err != nil {
 		return err
@@ -75,6 +77,20 @@ func (b *BlockTree) AppendBlock(block *Block) error {
 	}
 	b.Blocks = append(b.Blocks, block)
 	return nil
+}
+func (b *BlockTree) getLongestChain() []*Block {
+	maxLength := 0
+	maxChain := [][]*Block{}
+	for _, chain := range b.generateChains() {
+		if len(chain) == maxLength {
+			maxChain = append(maxChain, chain)
+		}
+		if len(chain) > maxLength {
+			maxLength = len(chain)
+			maxChain = [][]*Block{chain}
+		}
+	}
+	return maxChain[rand.Intn(len(maxChain))]
 }
 
 func (b *BlockTree) generateChains() [][]*Block {
@@ -120,19 +136,6 @@ func (b *BlockTree) generateChains() [][]*Block {
 	return chains
 }
 
-func (b *BlockTree) getBlockByHash(hash string) *Block {
-	for _, block := range b.Blocks {
-		h, err := block.ComputeHash()
-		if err != nil {
-			panic(err)
-		}
-		if h == hash {
-			return block
-		}
-	}
-	return nil
-}
-
 func (b *BlockTree) validNode(block *Block, backCheck int) (bool, error) {
 	hash, err := block.ComputeHash()
 	if err != nil {
@@ -158,7 +161,7 @@ func (b *BlockTree) validNode(block *Block, backCheck int) (bool, error) {
 	if isValid {
 		if backCheck > 0 {
 			if block.PrevHash != "" {
-				prevBlock := b.getBlockByHash(block.PrevHash)
+				prevBlock := b.GetBlockByHash(block.PrevHash)
 				if prevBlock.IsOp {
 					diff = b.OpDiff
 				} else {
