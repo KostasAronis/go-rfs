@@ -19,3 +19,5 @@ Assignment
 *.txt
 *.log
 *.dat
+*.bin
+*.graphviz
