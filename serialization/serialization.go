@@ -60,6 +60,16 @@ func DecodeToBlockTree(s []byte) (*blockchain.BlockTree, error) {
 	return &p, nil
 }
 
+func DecodeToBlock(s []byte) (*blockchain.Block, error) {
+	p := blockchain.Block{}
+	dec := gob.NewDecoder(bytes.NewReader(s))
+	err := dec.Decode(&p)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func WriteToFile(s []byte, file string) error {
 	f, err := os.Create(file)
 	if err != nil {
