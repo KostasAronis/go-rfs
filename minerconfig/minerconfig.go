@@ -31,8 +31,8 @@ type CommonMinerConfig struct {
 type Config struct {
 	//MinerID The ID of this miner (max 16 characters).
 	MinerID string
-	//PeerMinersAddrs An array of remote IP:port addresses, one per peer miner that this miner should connect to (using the OutgoingMinersIP below)
-	PeerMinersAddrs []string
+	//PeerMiners An array of remote IP:port addresses, one per peer miner that this miner should connect to (using the OutgoingMinersIP below)
+	PeerMiners []PeerMiner
 	//IncomingMinersAddr The local IP:port where the miner should expect other miners to connect to it (address it should listen on for connections from miners)
 	IncomingMinersAddr string
 	//OutgoingMinersIP The local IP that the miner should use to connect to peer miners
@@ -41,6 +41,11 @@ type Config struct {
 	IncomingClientsAddr string
 	//CommonMinerConfig struct describing the common configuration parameters shared by the miners
 	CommonMinerConfig CommonMinerConfig
+}
+
+type PeerMiner struct {
+	ID   string
+	Addr string
 }
 
 //Load reads values from given filename

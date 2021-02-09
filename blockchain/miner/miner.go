@@ -48,7 +48,7 @@ func New(minerConfig *minerconfig.Config) *Miner {
 	govecConfig := govec.GetDefaultConfig()
 	govecConfig.UseTimestamps = true
 	govecConfig.AppendLog = true
-	govecLogger := govec.InitGoVector(minerConfig.MinerID, minerConfig.MinerID+"GoVector.log", govecConfig)
+	govecLogger := govec.InitGoVector(minerConfig.MinerID, "logs/"+minerConfig.MinerID+"GoVector.log", govecConfig)
 	blockToFlood := make(chan *blockchain.Block, 10)
 	m := Miner{
 		minerConfig: minerConfig,
@@ -71,12 +71,12 @@ func New(minerConfig *minerconfig.Config) *Miner {
 		blockToFlood: blockToFlood,
 		opToFlood:    make(chan *blockchain.OpRecord),
 	}
-	for i := 0; i < len(m.minerConfig.PeerMinersAddrs); i++ {
+	for _, peer := range m.minerConfig.PeerMiners {
 		c := tcp.Client{
 			ID:          m.minerConfig.MinerID,
 			Address:     m.minerConfig.OutgoingMinersIP,
-			TargetID:    string(m.minerConfig.PeerMinersAddrs[i][len(m.minerConfig.PeerMinersAddrs[i])-1]),
-			TargetAddr:  m.minerConfig.PeerMinersAddrs[i],
+			TargetID:    peer.ID,
+			TargetAddr:  peer.Addr,
 			GovecLogger: govecLogger,
 		}
 		m.peers = append(m.peers, &c)

@@ -64,7 +64,7 @@ func (b *BlockchainFS) Init(config *minerconfig.Config) error {
 		SIGINT := make(chan os.Signal, 1)
 		signal.Notify(SIGINT, os.Interrupt)
 		<-SIGINT
-		err := b.Store("./data" + b.config.MinerID + ".bin")
+		err := b.Store("./logs/data" + b.config.MinerID + ".bin")
 		if err != nil {
 			panic(err)
 		}
