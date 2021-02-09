@@ -32,7 +32,7 @@
       <a href="#getting-started">Getting Started</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
+        <li><a href="#running">Running</a></li>
         <li><a href="#usage">Usage</a></li>
       </ul>
     </li>
@@ -50,24 +50,27 @@
 ## About The Project
 go-rfs is a distributed record file system running on a minimal custom blockchain network.  
 The idea and specifications for the projects were found at the [416 Distibuted Systems: Project 1 of University of British Columbia](https://www.cs.ubc.ca/~bestchai/teaching/cs416_2018w1/project1/index.html) assigned (as far as i can tell) by professor [Ivan Beschastnikh](https://www.cs.ubc.ca/~bestchai/).  
-The goals of this project are purely educational, as a first step to design and implement a distributed system, get some hands on experience on blockchain implementation and refreshing my basic golang knowledge.
+The goals of this project are purely educational, as a first step to design and implement a distributed system, get some hands on experience on blockchain implementation and refreshing my go language skills.
 
 ## Built With
-go version go1.15.6 windows/amd64
+go version go1.15.8 windows/amd64
 
-It is an requirement on the project's specification that only golang's stdlib should be used for the implementation. So no further libraries have been used.
+It is an requirement on the project's specification that only golang's stdlib should be used for the implementation. So no further libraries have been used in the main project.
 
+For easier debugging of the blockchain and the miner network
 
 <!-- GETTING STARTED -->
 ## Getting Started
-
+TBD
+<!--
 This is an example of how you may give instructions on setting up your project locally.
 To get a local copy up and running follow these simple example steps.
+Probably dont need it
+-->
 
 ### Prerequisites
 
-This is an example of how to list things you need to use the software and how to install them.
-* [golang](https://golang.org/doc/install) version 1.15.6
+* [golang](https://golang.org/doc/install) version 1.15.8
 
 ### Running
 TBD
@@ -75,11 +78,22 @@ TBD
 
 ### Usage
 TBD
-<!-- Examples of how to use the filesystem -->
+<!-- Examples of how to use the filesystem via the client -->
 
 
 <!-- ROADMAP -->
 ## Roadmap
+Immediate:
+* CLEANUP!!!
+* Refactor ( Reduce shared resources use channels (or sync) instead )
+* Compute hash only once (and afterwards only explicitly for validation?)
+* Flood op blocks & Handle ops
+* Flood ops
+* Complete kube setup ?
+
+Later on:
+* Discovery service ( or real p2p networking ) for network creation instead of direct addresses in config
+* CUDA integration for more parallel operations / fastest pow(?)
 See the [open issues](https://github.com/KostasAronis/go-rfs/issues) for a list of proposed features (and known issues).
 
 <!-- CONTRIBUTING -->
