@@ -1,0 +1,59 @@
+version: '3.4'
+
+services:
+
+  miner_1:
+    image: miner
+    build:
+      context: .
+      dockerfile: miner.dockerfile
+    #environment: 
+    networks:
+      minernet:
+    ports:
+      - "8001:8001"
+    volumes:
+      - ${PWD}/dockerenv/config1.json:/config.json
+      - ${PWD}/dockerenv/logs:/logs
+
+  miner_2:
+    image: miner
+    build:
+      context: .
+      dockerfile: miner.dockerfile
+    #environment: 
+    #ports: #ADD PORTS
+    networks:
+      minernet:
+    volumes:
+      - ${PWD}/dockerenv/config2.json:/config.json
+      - ${PWD}/dockerenv/logs:/logs
+
+  miner_3:
+    image: miner
+    build:
+      context: .
+      dockerfile: miner.dockerfile
+    #environment: 
+    #ports: #ADD PORTS
+    networks:
+      minernet:
+    volumes:
+      - ${PWD}/dockerenv/config3.json:/config.json
+      - ${PWD}/dockerenv/logs:/logs
+
+  miner_4:
+    image: miner
+    build:
+      context: .
+      dockerfile: miner.dockerfile
+    #environment: 
+    #ports: #ADD PORTS
+    networks:
+      minernet:
+    volumes:
+      - ${PWD}/dockerenv/config4.json:/config.json
+      - ${PWD}/dockerenv/logs:/logs
+
+networks:
+  minernet:

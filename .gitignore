@@ -21,3 +21,4 @@ Assignment
 *.dat
 *.bin
 *.graphviz
+dockerenv

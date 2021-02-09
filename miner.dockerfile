@@ -8,9 +8,12 @@ WORKDIR /build
 
 RUN ls /build
 
-RUN go build -o /output/miner cmd/miner/miner.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /output/miner -a -ldflags '-extldflags "-static"' cmd/miner/miner.go
 
 FROM alpine:latest
+
+EXPOSE 8001
+EXPOSE 9001
 
 COPY --from=Builder /output/miner .
 
