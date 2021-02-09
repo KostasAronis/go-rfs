@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"time"
 
 	"github.com/DistributedClocks/GoVector/govec"
 )
@@ -30,9 +31,10 @@ func (c *Client) Send(msg *Msg) *Msg {
 		c.GovecLogger = govec.InitGoVector(c.ID, c.ID+"GoVector.log", goVecConfig)
 	}
 	vectorClockMessage := c.GovecLogger.PrepareSend("SendingMessage", msg, govec.GetDefaultLogOptions())
-	conn, err := net.Dial("tcp", c.TargetAddr)
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.Dial("tcp", c.TargetAddr)
 	if err != nil {
-		log.Println(err)
+		log.Printf("tcp err: %s", err.Error())
 		return &Msg{
 			ClientID: c.ID,
 			MSGType:  Error,
