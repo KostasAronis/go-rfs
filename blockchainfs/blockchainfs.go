@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/DistributedClocks/GoVector/govec"
@@ -25,6 +26,7 @@ const goRoutineCount = 2
 //TODO: less type properties, more functional methods! Do not keep channels _loose_ on the _global_ scope.
 type BlockchainFS struct {
 	BlockToFlood chan *blockchain.Block
+	BlockFlooded chan bool
 	GovecLogger  *govec.GoLog
 	//on init
 	config          *minerconfig.Config
@@ -61,9 +63,9 @@ func (b *BlockchainFS) Init(config *minerconfig.Config) error {
 	atomic.StoreUint32(&b.isMiningOp, 0)
 	go b.mineForever()
 	go func() {
-		SIGINT := make(chan os.Signal, 1)
-		signal.Notify(SIGINT, os.Interrupt)
-		<-SIGINT
+		SIGNALS := make(chan os.Signal, 1)
+		signal.Notify(SIGNALS, os.Interrupt, os.Kill, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
+		<-SIGNALS
 		err := b.Store("./logs/data" + b.config.MinerID + ".bin")
 		if err != nil {
 			panic(err)
@@ -174,29 +176,31 @@ func (b *BlockchainFS) Restore(filename string) error {
 func (b *BlockchainFS) startTimer() {
 	log.Println("started timer on new op batch")
 	b.timer = time.NewTimer(time.Duration(b.config.CommonMinerConfig.GenOpBlockTimeout) * time.Millisecond)
-	go func() {
-		<-b.timer.C
-		log.Println("started mining new op block")
-		b.pauseNoopChan <- true
-		b.timer = nil
-		b.bank = b.stagingBank
-		b.FS = b.stagingFS
-		newBlock := b.createStageBlock(b.stagingOps)
-		hash, err := newBlock.ComputeHash()
-		if err != nil {
-			panic(err)
-		}
-		err = b.tryAddBlock(newBlock)
-		if err != nil {
-			panic(err)
-		}
-		log.Println("added op block")
-		b.resumeNoopChan <- true
-		log.Printf("mined op block %s\n", hash)
-		for _, c := range b.waitingClientBlock {
-			c <- newBlock
-		}
-	}()
+	go b.execTimer()
+}
+
+func (b *BlockchainFS) execTimer() {
+	<-b.timer.C
+	log.Println("started mining new op block")
+	b.pauseNoopChan <- true
+	b.timer = nil
+	b.bank = b.stagingBank
+	b.FS = b.stagingFS
+	newBlock := b.createStageBlock(b.stagingOps)
+	hash, err := newBlock.ComputeHash()
+	if err != nil {
+		panic(err)
+	}
+	err = b.tryAddBlock(newBlock)
+	if err != nil {
+		panic(err)
+	}
+	log.Println("added op block")
+	b.resumeNoopChan <- true
+	log.Printf("mined op block %s\n", hash)
+	for _, c := range b.waitingClientBlock {
+		c <- newBlock
+	}
 }
 
 func (b *BlockchainFS) createStageBlock(stagingOps []*blockchain.OpRecord) *blockchain.Block {
@@ -297,6 +301,7 @@ func (b *BlockchainFS) tryAddBlock(block *blockchain.Block) error {
 	b.bank[block.MinerID] = b.bank[block.MinerID] + coins
 	log.Println("flooding block")
 	b.BlockToFlood <- block
+	<-b.BlockFlooded
 	return nil
 }
 

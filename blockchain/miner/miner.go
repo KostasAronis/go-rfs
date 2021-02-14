@@ -39,6 +39,7 @@ type Miner struct {
 	pendingOperations []*blockchain.OpRecord
 	timer             *time.Timer
 	blockToFlood      chan *blockchain.Block
+	blockFlooded      chan bool
 	opToFlood         chan *blockchain.OpRecord
 	exitError         chan error
 }
@@ -49,7 +50,8 @@ func New(minerConfig *minerconfig.Config) *Miner {
 	govecConfig.UseTimestamps = true
 	govecConfig.AppendLog = true
 	govecLogger := govec.InitGoVector(minerConfig.MinerID, "logs/"+minerConfig.MinerID+"GoVector.log", govecConfig)
-	blockToFlood := make(chan *blockchain.Block, 10)
+	blockToFlood := make(chan *blockchain.Block)
+	blockFlooded := make(chan bool)
 	m := Miner{
 		minerConfig: minerConfig,
 		Coins:       0,
@@ -66,9 +68,11 @@ func New(minerConfig *minerconfig.Config) *Miner {
 		},
 		blockchainfs: &blockchainfs.BlockchainFS{
 			BlockToFlood: blockToFlood,
+			BlockFlooded: blockFlooded,
 			GovecLogger:  govecLogger,
 		},
 		blockToFlood: blockToFlood,
+		blockFlooded: blockFlooded,
 		opToFlood:    make(chan *blockchain.OpRecord),
 	}
 	for _, peer := range m.minerConfig.PeerMiners {
@@ -348,6 +352,7 @@ func (m *Miner) floodToPeers() {
 			log.Println("got block to flood")
 			m.floodBlock(block)
 			log.Println("flooded block")
+			m.blockFlooded <- true
 		case op := <-m.opToFlood:
 			m.floodOp(op)
 		}
@@ -373,7 +378,7 @@ func (m *Miner) floodBlock(block *blockchain.Block) {
 		MSGType:  tcp.Block,
 		Payload:  blockBytes,
 	}
-	err = m.flood(&msg, clientsToSend)
+	err = m.flood(&msg, "block: prevhash: "+block.PrevHash, clientsToSend)
 	if err != nil {
 		log.Printf("error in flooding: %s", err.Error())
 	}
@@ -391,14 +396,14 @@ func (m *Miner) floodOp(op *blockchain.OpRecord) {
 		MSGType:  tcp.MSGType(op.OpType),
 		Payload:  op,
 	}
-	err := m.flood(&msg, clientsToSend)
+	err := m.flood(&msg, op.OpType.String()+": "+op.Filename, clientsToSend)
 	if err != nil {
 		log.Printf("error in flooding: %s", err.Error())
 	}
 }
 
 //TODO: FIX ERROR HANDLING ON MULTIPLE CLIENTS. FFS
-func (m *Miner) flood(msg *tcp.Msg, peers []*tcp.Client) error {
+func (m *Miner) flood(msg *tcp.Msg, govecTxt string, peers []*tcp.Client) error {
 	errors := []string{}
 	//mutex := sync.Mutex{}
 	//wg := sync.WaitGroup{}
@@ -406,16 +411,17 @@ func (m *Miner) flood(msg *tcp.Msg, peers []*tcp.Client) error {
 		//wg.Add(1)
 		go func(c *tcp.Client) {
 			log.Printf("flood to peer: %s ", c.TargetID)
-			res := c.Send(msg)
+			res := c.Send(msg, govecTxt)
 			log.Printf("got res from peer: %s, %s ", c.TargetID, res.MSGType.String())
-			// if res.MSGType == tcp.Error {
-			// 	mutex.Lock()
-			// 	defer mutex.Unlock()
-			// 	err := res.Payload.(string)
-			// 	errors = append(errors, c.TargetID+": "+err)
-			// 	log.Printf("done flooding to peer: %s ", c.TargetID)
-			// 	wg.Done()
-			// }
+			if res.MSGType == tcp.Error {
+				log.Println("ERROR!: ", res.Payload)
+				// 	mutex.Lock()
+				// 	defer mutex.Unlock()
+				// 	err := res.Payload.(string)
+				// 	errors = append(errors, c.TargetID+": "+err)
+				// 	log.Printf("done flooding to peer: %s ", c.TargetID)
+				// 	wg.Done()
+			}
 		}(client)
 	}
 	//wg.Wait()
