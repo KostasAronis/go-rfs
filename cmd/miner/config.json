@@ -1,16 +1,29 @@
 {
 	"MinerID": "1",
-	"PeerMinersAddrs": ["127.0.0.1:9002", "127.0.0.1:9003", "127.0.0.1:9004"],
+	"PeerMiners": [
+    {
+      "Addr": "localhost:9002",
+      "ID": "2"
+    },
+    {
+      "Addr": "localhost:9003",
+      "ID": "3"
+    },
+    {
+      "Addr": "localhost:9004",
+      "ID": "4"
+    }
+  ],
 	"IncomingClientsAddr": ":8001",
 	"IncomingMinersAddr": ":9001",
 	"OutgoingMinersIP": ":10001",
 	"CommonMinerConfig": {
-    "MinedCoinsPerOpBlock": 3,
+    "MinedCoinsPerOpBlock": 6,
     "MinedCoinsPerNoOpBlock": 2,
     "NumCoinsPerFileCreate": 1,
     "GenOpBlockTimeout": 500,
     "PowPerOpBlock": 5,
-    "PowPerNoOpBlock": 5,
+    "PowPerNoOpBlock": 6,
     "ConfirmsPerFileCreate": 1,
     "ConfirmsPerFileAppend": 2,
     "GenesisBlockHash": "af6aaa6a229b361b9374df2e39879bed"
