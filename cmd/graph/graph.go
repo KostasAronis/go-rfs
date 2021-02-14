@@ -2,7 +2,6 @@ package main
 
 import (
 	"io/ioutil"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -11,6 +10,14 @@ import (
 	"github.com/KostasAronis/go-rfs/serialization"
 	"github.com/awalterschulze/gographviz"
 )
+
+var idToColor = map[string]string{
+	"0": "black",
+	"1": "green",
+	"2": "blue",
+	"3": "yellow",
+	"4": "sienna",
+}
 
 //Takes as first cmd argument the name of a .bin file produced by a miner and creates a graphviz file of all blocks in the blockchain
 func main() {
@@ -28,8 +35,6 @@ func main() {
 		if filepath.Ext(f.Name()) == ".bin" {
 			dataFilepath := path.Join(dataFileDir, f.Name())
 			turnDatafileToGraphfile(dataFilepath)
-		} else {
-			log.Println(filepath.Ext(f.Name()))
 		}
 	}
 }
@@ -43,7 +48,7 @@ func turnDatafileToGraphfile(dataFilepath string) {
 	if err != nil {
 		panic(err)
 	}
-	ioutil.WriteFile(dataFilepath+".graphviz", []byte(createGraph(blockChain).String()), 0666)
+	ioutil.WriteFile(dataFilepath+".dot", []byte(createGraph(blockChain).String()), 0666)
 }
 
 func createGraph(blockChain *blockchain.BlockTree) *gographviz.Graph {
@@ -59,15 +64,20 @@ func createGraph(blockChain *blockchain.BlockTree) *gographviz.Graph {
 		if err != nil {
 			panic(err)
 		}
+		attrs := map[string]string{}
 		//TODO: COLOR FOR OP / NOOP BLOCKS, COLOR FOR EXTERNAL / MINED BLOCKS
-		g.AddNode("G", esc(h), nil)
+		if block.IsOp {
+			attrs["color"] = "red"
+		}
+		attrs["fontcolor"] = idToColor[block.MinerID]
+
+		g.AddNode("G", esc(h), attrs)
 	}
 	for _, block := range blockChain.Blocks {
 		h, err := block.ComputeHash()
 		if err != nil {
 			panic(err)
 		}
-		//TODO: COLOR FOR OP / NOOP BLOCKS, COLOR FOR EXTERNAL / MINED BLOCKS
 		if block.PrevHash != "" {
 			g.AddEdge(esc(block.PrevHash), esc(h), true, nil)
 		}
