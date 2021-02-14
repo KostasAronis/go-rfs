@@ -24,7 +24,7 @@ func (r *RfsClient) CreateFile(fname string) (err error) {
 			"FileName": fname,
 		},
 	}
-	res := r.tcpClient.Send(&tcpMsg)
+	res := r.tcpClient.Send(&tcpMsg, "Create: "+fname)
 	if res.MSGType == tcp.Error {
 		return errors.New(res.Payload.(string))
 	}
@@ -43,7 +43,7 @@ func (r *RfsClient) ListFiles() (fnames []string, err error) {
 			"FileName": "",
 		},
 	}
-	res := r.tcpClient.Send(&tcpMsg)
+	res := r.tcpClient.Send(&tcpMsg, "ListFiles")
 	if res.MSGType == tcp.Error {
 
 	}
@@ -63,7 +63,7 @@ func (r *RfsClient) TotalRecs(fname string) (numRecs uint16, err error) {
 			"FileName": fname,
 		},
 	}
-	res := r.tcpClient.Send(&tcpMsg)
+	res := r.tcpClient.Send(&tcpMsg, "TotalRecs: "+fname)
 	if res.MSGType == tcp.Error {
 
 	}
@@ -87,7 +87,7 @@ func (r *RfsClient) ReadRec(fname string, recordNum uint16, record *rfslib.Recor
 			"Record":   recordNum,
 		},
 	}
-	res := r.tcpClient.Send(&tcpMsg)
+	res := r.tcpClient.Send(&tcpMsg, "ReadRec: "+fname)
 	if res.MSGType == tcp.Error {
 
 	}
@@ -111,7 +111,7 @@ func (r *RfsClient) AppendRec(fname string, record *rfslib.Record) (recordNum ui
 			"Record":   record,
 		},
 	}
-	res := r.tcpClient.Send(&tcpMsg)
+	res := r.tcpClient.Send(&tcpMsg, "AppendRec: "+fname+" : "+record.ToString())
 	if res.MSGType == tcp.Error {
 		return 0, errors.New(res.Payload.(string))
 	}
