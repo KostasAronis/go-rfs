@@ -3,6 +3,7 @@ package blockchain
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 )
@@ -162,6 +163,10 @@ func (b *BlockTree) validNode(block *Block, backCheck int) (bool, error) {
 		if backCheck > 0 {
 			if block.PrevHash != "" {
 				prevBlock := b.GetBlockByHash(block.PrevHash)
+				if prevBlock == nil {
+					log.Printf("NIL PREVIOUS BLOCK FROM MINER: %s WITH HASH: %s WITH PREV: %s", block.MinerID, hash, block.PrevHash)
+					return false, errors.New("NIL PREVIOUS BLOCK")
+				}
 				if prevBlock.IsOp {
 					diff = b.OpDiff
 				} else {
