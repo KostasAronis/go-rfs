@@ -20,5 +20,6 @@ Assignment
 *.log
 *.dat
 *.bin
-*.graphviz
+*.dot
 dockerenv
+out/
