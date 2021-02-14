@@ -16,12 +16,12 @@ import (
 //FileSystem represents an in memory filesystem
 type FileSystem struct {
 	Files map[string]*File
-	m     *sync.RWMutex
+	m     sync.RWMutex
 }
 
 func (f *FileSystem) Init() {
 	f.Files = make(map[string]*File)
-	f.m = &sync.RWMutex{}
+	f.m = sync.RWMutex{}
 }
 
 func (f *FileSystem) Clone() *FileSystem {
